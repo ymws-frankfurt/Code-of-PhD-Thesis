@@ -1,0 +1,615 @@
+
+
+import pandas as pd
+import eikon as ek
+import matplotlib.pyplot as plt
+import numpy as np
+import statsmodels.api as sm
+from linearmodels.panel import PanelOLS
+
+ek.set_app_key('a11a2281b8cd45b5b65b935a584aeec3dc957f43')
+
+app_id = ek.get_app_key()
+
+print(app_id)
+
+
+directory="C:\\Users\\s9194518\\Python\\Lins2017\\"
+
+
+del app_id
+
+#%%
+'''
+ [Section 1: extract RIC using CUSIP - Goal is creating convert table df1]
+ 
+ - ◆◇ Stock Exchange Code: only 11-19 ◆◇
+ 
+ - ◆◇ if table 1 used, 3 rows in the last are noise: automatically removed later? ◆◇
+ 
+ - "cusip_DF[:4000]" together with "debug=True" (TR.RIC) works!!!
+ 
+ - USE CONVERT TABLE FROM EXCEL PIVOT: set("list of CUSIP table") is bad as random numbers in some rows
+ 
+ - data = ek.get_symbology(["G5753U112"], from_symbol_type="CUSIP", bestMatch=False, raw_output=True) 
+ 
+ - df1_drop=df1.dropna(subset=['RIC'], inplace=True) not working because not recognized as NA
+ 
+
+'''
+
+
+df_convtab = pd.read_excel(directory+"CUSIP_into_TR2.xlsx", sheet_name="Tabelle1") #◇ 1 or 2
+
+df_cusip_str=df_convtab.applymap(str)
+list_cusip_str=df_cusip_str.CUSIP.tolist()
+
+df1A, err = ek.get_data(list_cusip_str[:5000], ['TR.RIC'], debug=True)
+df1A.columns.values[0]='CUSIP' 
+
+df1B, err = ek.get_data(list_cusip_str[5001:10000], ['TR.RIC'], debug=True)
+df1B.columns.values[0]='CUSIP' 
+
+df1C, err = ek.get_data(list_cusip_str[10001:], ['TR.RIC'], debug=True)
+df1C.columns.values[0]='CUSIP' 
+
+frames_converttab = [df1A, df1B, df1C]
+
+df_ConvertTable = pd.concat(frames_converttab) # df_ConvertTable not used below
+
+del frames_converttab, df_convtab, df_cusip_str, list_cusip_str
+
+'''
+[No more needed]
+
+cusip_STR_A=cusip_DF[:5000].to_string(index=False,header=False) 
+cusip_STR_B=cusip_DF[5001:10000].to_string(index=False,header=False) 
+cusip_STR_C=cusip_DF[10001:].to_string(index=False,header=False) 
+
+cusip_STR2_A=cusip_STR_A.split("\n")
+cusip_STR2_B=cusip_STR_B.split("\n")
+cusip_STR2_C=cusip_STR_C.split("\n")
+
+
+#Index 3999:19239Y108 Part A
+#Index 4000:19243A104 Part B
+#Index 6209:Y93691106 Part B
+
+
+cusip_STR_nospace_A=[]
+cusip_STR_nospace_B=[]
+cusip_STR_nospace_C=[]
+
+for i in range(len(cusip_STR2_A)):
+    cusip_STR_nospace_A.insert(i,cusip_STR2_A[i].strip()) #.replace(" ","").replace("\t","") ??????????
+
+for i in range(len(cusip_STR2_B)):
+    cusip_STR_nospace_B.insert(i,cusip_STR2_B[i].strip()) 
+
+for i in range(len(cusip_STR2_C)):
+    cusip_STR_nospace_C.insert(i,cusip_STR2_C[i].strip())
+    
+# Not working so above stringing is needed: df1Aa, err = ek.get_data(cusip_DF.head(4000)["CUSIP"].tolist(), ['TR.RIC'], raw_output=False)
+
+
+
+
+'''
+
+#%%
+'''
+ [Section 2: extract ESG scores using df_ConvertTable (but in batches df1A and df1B)]
+ 
+ - ◆◇ FY is disabled for now ◆◇
+ 
+ 
+'''
+
+
+mylistA=[]
+mylistB=[]
+mylistC=[]
+
+tempA = df1A["RIC"].tolist()
+tempB = df1B["RIC"].tolist()
+tempC = df1C["RIC"].tolist()
+
+
+del df1A, df1B, df1C
+
+# temp cannot be used as instruments because it includes blank cells
+
+for j in range(len(tempA)):
+    
+    if tempA[j]=="":
+        mylistA.insert(j,"0")
+    else:
+        mylistA.insert(j,tempA[j])
+
+
+for j in range(len(tempB)):
+    
+    if tempB[j]=="":
+        mylistB.insert(j,"0")
+    else:
+        mylistB.insert(j,tempB[j])
+
+
+for j in range(len(tempC)):
+    
+    if tempC[j]=="":
+        mylistC.insert(j,"0")
+    else:
+        mylistC.insert(j,tempC[j])
+
+# Too many missing values if using parameters={'SDate':'2008-01-01', 'EDate':'2009-12-31'}, 
+# when there is actually data (e.g. DE.N) => try CY and separate each year
+
+
+# frequency of zeros
+print("mylistA.count0 is "+str(mylistA.count("0"))+" or "+str(mylistA.count("0")/len(mylistA)))
+print("mylistB.count0 is "+str(mylistB.count("0"))+" or "+str(mylistB.count("0")/len(mylistB)))
+print("mylistC.count0 is "+str(mylistC.count("0"))+" or "+str(mylistC.count("0")/len(mylistC)))
+
+# exclude 'TR.TRESGCScore',
+fields_list=['TR.TRESGScore','TR.EnvironmentPillarScore','TR.SocialPillarScore','TR.GovernancePillarScore',]
+
+
+df2008A_CY,err = ek.get_data(instruments=mylistA, fields=fields_list , parameters={'Period': 'CY2008'}, raw_output=False)
+#df2008A_FY,err = ek.get_data(instruments=mylistA, fields=fields_list , parameters={'Period': 'FY2008'}, raw_output=False)
+
+
+df2008B_CY,err = ek.get_data(instruments=mylistB, fields=fields_list , parameters={'Period': 'CY2008'}, raw_output=False)
+#df2008B_FY,err = ek.get_data(instruments=mylistB, fields=fields_list , parameters={'Period': 'FY2008'}, raw_output=False)
+
+
+df2008C_CY,err = ek.get_data(instruments=mylistC, fields=fields_list , parameters={'Period': 'CY2008'}, raw_output=False)
+#df2008C_FY,err = ek.get_data(instruments=mylistC, fields=fields_list , parameters={'Period': 'FY2008'}, raw_output=False)
+
+
+frames_CY = [df2008A_CY, df2008B_CY, df2008C_CY]
+#frames_FY = [df2008A_FY, df2008B_FY, df2008C_FY]
+
+df2008_CY= pd.concat(frames_CY)
+#df2008_FY= pd.concat(frames_FY)
+
+df2008_CY['CY_of_CSR']=2008
+df2008_CY.columns.values[0]='RIC'
+
+#df2008_FY['FY_of_CSR']=2008
+#df2008_FY.columns.values[0]='RIC'
+
+df2008_CY.count(axis="index")
+#df2008_FY.count(axis="index")
+
+
+# "Vlookup"
+df2008_cusip_CY=df2008_CY.merge(df_ConvertTable, on="RIC")  # automatically dropping RIC=0 !
+#df2008_cusip_FY=df2008_FY.merge(df_ConvertTable, on="RIC")  # automatically dropping RIC=0 !
+
+df2008_cusip_final_CY=df2008_cusip_CY.dropna(subset=['ESG Score']) # , inplace=True
+#df2008_cusip_final_FY=df2008_cusip_FY.dropna(subset=['ESG Score']) # , inplace=True
+
+
+# Rename
+
+df2008_cusip_final_CY.rename(columns={'ESG Score':'ESG_Score','Environment Pillar Score':'Environment_Pillar_Score','Social Pillar Score':'Social_Pillar_Score','Governance Pillar Score':'Governance_Pillar_Score'}, inplace=True)
+#df2008_cusip_final_FY.rename(columns={'ESG Score':'ESG_Score','Environment Pillar Score':'Environment_Pillar_Score','Social Pillar Score':'Social_Pillar_Score','Governance Pillar Score':'Governance_Pillar_Score'}, inplace=True)
+
+
+df2008_cusip_final_CY.describe()
+
+
+del mylistA, mylistB, mylistC, tempA, tempB, tempC, j, fields_list
+del df2008A_CY, df2008B_CY, df2008C_CY
+#del df2008A_FY, df2008B_FY, df2008C_FY
+
+del df2008_cusip_CY, df2008_CY, frames_CY 
+#del df2008_cusip_FY, df2008_FY, frames_FY
+
+
+'''
+#Python merging is preferred over Stata
+
+df2008_cusip_final_CY.to_stata(directory+'ESG_CrisisPeriod_CY.dta') 
+df2008_cusip_final_FY.to_stata(directory+'ESG_CrisisPeriod_FY.dta') 
+
+'''
+#%%
+'''
+ [Section 3: Import CRSP: Crisis Period (Aug2008 - March2009) & Momentum (Aug2007 - July2008 stock price)]
+ 
+ -  ◆◇ Return data not only avaiable in CRSP/Comp but also in Compustat/CapitalIQ with more data ◆◇
+ - "CRSP_Crisis_Period_Return2.xlsx" is from Compustat/CapitalIQ
+ 
+  -  ◆◇ Too much obs drop from df_CRSP_Crisis to df_CRSP_Crisis2: Why?? ◆◇
+ 
+'''
+
+# [Crisis Period (Aug2008 - March2009)]
+
+CRSP_Crisis = pd.read_excel(directory+"CRSP_Crisis_Period_Return2.xlsx", sheet_name="WRDS") #◇ 1 or 2
+
+df_CRSP_Crisis = pd.DataFrame(CRSP_Crisis, columns= ['CUSIP','Company Name','Monthly Total Return','Data Date - Security Monthly','Standard Industry Classification Code']) # ,'Price - Close - Monthly'
+
+del CRSP_Crisis
+
+
+# For df, .astype(str) should be used instead of str()
+df_CRSP_Crisis["Period_1-8"] = df_CRSP_Crisis.groupby("CUSIP")["Data Date - Security Monthly"].rank(ascending=1,method='dense')
+df_CRSP_Crisis['SIC'] = df_CRSP_Crisis['Standard Industry Classification Code'].astype(str).str[:2]
+
+#df_CRSP_Crisis['Year'] = df_CRSP_Crisis['Data Date - Security Monthly'].astype(str).str[0:4] 
+#df_CRSP_Crisis['Month'] = df_CRSP_Crisis['Data Date - Security Monthly'].astype(str).str[4:6]
+
+
+
+# CHECK OVERALL
+df_CRSP_Crisis.count(axis="index")
+df_CRSP_Crisis.CUSIP.isna().sum() # 109606+566 = 110172
+
+
+# CHECK NULL: https://markhneedham.com/blog/2017/07/05/pandas-find-rows-where-columnfield-is-null/
+
+null_columns=df_CRSP_Crisis.columns[df_CRSP_Crisis.isnull().any()]
+
+# Single column
+print(df_CRSP_Crisis[df_CRSP_Crisis["CUSIP"].isnull()][null_columns])                # "#DIV/0!" is the reason for 566 rows
+print(df_CRSP_Crisis[df_CRSP_Crisis['Standard Industry Classification Code'].isnull()][null_columns])
+
+# Overall
+print(df_CRSP_Crisis[df_CRSP_Crisis.isnull().any(axis=1)][null_columns].head(100))  
+
+
+# [Momentum (Aug2007 - July2008)]
+
+CRSP_Pre = pd.read_excel(directory+"CRSP_Pre_Crisis_Price2.xlsx", sheet_name="WRDS") #◇ 1 or 2
+df_CRSP_Pre = pd.DataFrame(CRSP_Pre, columns= ['CUSIP','Data Date - Security Monthly','Price - Close - Monthly'])
+
+del CRSP_Pre
+
+df_CRSP_Pre.count(axis="index")
+
+Price_2008Jul = df_CRSP_Pre.loc[df_CRSP_Pre.groupby(["CUSIP"])["Data Date - Security Monthly"].idxmax()]
+Price_2007Aug = df_CRSP_Pre.loc[df_CRSP_Pre.groupby(["CUSIP"])["Data Date - Security Monthly"].idxmin()]
+
+
+Price_2008Jul.rename(columns={'Price - Close - Monthly':'Price_2008July'}, inplace=True) # "Data Date - Security Monthly":"Date", is unnecessary
+Price_2007Aug.rename(columns={'Price - Close - Monthly':'Price_2007Aug'}, inplace=True)  # "Data Date - Security Monthly":"Date", is unnecessary
+
+
+# Drop a row or observation by condition: df[df.Name != 'Alisa']
+Price_2008Jul_only20080731=Price_2008Jul[Price_2008Jul["Data Date - Security Monthly"] == 20080731]
+Price_2007Aug_only20070831=Price_2007Aug[Price_2007Aug["Data Date - Security Monthly"] == 20070831]
+
+
+# drop unnecessary column "Date" before appending
+Price_2008Jul_only20080731=Price_2008Jul_only20080731.drop(columns=["Data Date - Security Monthly"])
+Price_2007Aug_only20070831=Price_2007Aug_only20070831.drop(columns=["Data Date - Security Monthly"])
+
+
+del Price_2008Jul, Price_2007Aug
+
+
+
+
+# [Merge Momentum to Crisis Period]
+
+df_CRSP_Crisis2=df_CRSP_Crisis.merge(Price_2008Jul_only20080731, on="CUSIP")
+df_CRSP_Crisis_wPrice=df_CRSP_Crisis2.merge(Price_2007Aug_only20070831, on="CUSIP")
+
+del df_CRSP_Crisis2, Price_2008Jul_only20080731, Price_2007Aug_only20070831
+
+# Momentum is net return analogous to raw return
+df_CRSP_Crisis_wPrice['Momentum_firm'] = df_CRSP_Crisis_wPrice['Price_2008July']/df_CRSP_Crisis_wPrice['Price_2007Aug']-1
+
+
+df_CRSP_Crisis_wPrice.count(axis="index")
+
+
+
+
+'''
+[Checking with Excel]
+
+df_CRSP_Crisis_wPrice.to_excel(directory+"Check_output_post.xlsx")
+df_CRSP_Crisis.to_excel(directory+"Check_output_pre.xlsx")
+
+
+ - ◆◇ droping blank prices unnecessary because "merge" already done ◆◇
+
+df_CRSP_Crisis_wPrice_dropped=df_CRSP_Crisis_wPrice[df_CRSP_Crisis_wPrice.Date == 20070831]
+
+'''
+
+#%%
+'''
+ [Section 4.1: Import Fama French loadings & Momentum factor and then regress to get coefficients]
+ 
+ - ◆◇ Data Date or Fiscal Year ◆◇
+ - used the coefficients from regression in Python but need to check that it is consistent with Stata
+  
+'''
+
+WEIGHTED VALUE INDEX
+Import value of momentum FF crisis period
+
+# [Importing FF, Momentum, Raw returns (60 months: 2003August-2008July) and append]
+
+df_Return_60 = pd.read_excel(directory+"Compustat_Return_60months_rev.xlsx", sheet_name="WRDS") #◇
+df_Momentum = pd.read_excel(directory+"Fama_French_HP\\"+"F-F_Momentum_Factor.xlsx", sheet_name="Tabelle1") #◇
+df_FF = pd.read_excel(directory+"Fama_French_HP\\"+"F-F_Research_Data_Factors.xlsx", sheet_name="Tabelle1") #◇
+
+
+# Keeping columns of dataframe
+df_Return_60 = df_Return_60[['CUSIP','Data Date - Security Monthly2','Monthly Total Return']]
+
+
+df_Return_60.rename(columns={"Data Date - Security Monthly2":"Data Date - Security Monthly"}, inplace=True)
+df_Momentum.rename(columns={"YearMonth":"Data Date - Security Monthly"}, inplace=True)
+df_FF.rename(columns={"YearMonth":"Data Date - Security Monthly"}, inplace=True)
+
+
+
+df_Momentum_60=df_Momentum[(df_Momentum['Data Date - Security Monthly'] >= 200308) & (df_Momentum['Data Date - Security Monthly'] <= 200807)]
+df_FF_60=df_FF[(df_FF['Data Date - Security Monthly'] >= 200308) & (df_FF['Data Date - Security Monthly'] <= 200807)]
+
+
+# Merging FF and Momentum factors
+df_temp = df_Return_60.merge(df_FF_60, on="Data Date - Security Monthly")
+df_reg = df_temp.merge(df_Momentum_60, on="Data Date - Security Monthly")
+
+# need to string CUSIP before sorting; otherwise error: but then another error is .astype 
+# i.e. in creating DTA file, "Fixed width strings in Stata .dta files are limited to 244 (or fewer) characters.  Column 'CUSIP' does not satisfy this restriction."
+#df_temp.CUSIP=df_temp.CUSIP.astype(str)                 
+#df_reg=df_temp.sort_values(by=['CUSIP','Data Date - Security Monthly'])
+
+del df_temp
+
+'''
+Why use "Compustat_Return_60months_rev.xlsx" instead of "Compustat_Return_60months.xlsx" ???
+
+Because if I run the following:
+df_Return_60['Data Date - Security Monthly'] = df_Return_60['Data Date - Security Monthly'].astype(str).str[0:6] 
+
+I get the error:
+ValueError: You are trying to merge on object and int64 columns. If you wish to proceed you should use pd.concat
+
+'''
+
+
+# Cursory treatment for too large dataset
+
+df_FFandMom = df_FF_60.merge(df_Momentum_60, on="Data Date - Security Monthly")
+df_FFandMom.to_stata(directory+'Stata\\'+'df_FFandMom.dta') 
+
+
+df_Return_60['CUSIP'] = df_Return_60['CUSIP'].astype(str)
+df_Return_60['CUSIP'].str.strip
+df_Return_60.to_stata(directory+'df_Return_60.dta', version=117) 
+
+
+# even cursory treatment does not work; on the other hand, what I need is the coefficients only so run here, and check stata later
+
+
+
+
+# [regress]
+
+
+df_reg.to_stata(directory+'df_reg.dta', write_index=False) 
+df_reg.to_excel(directory+'df_reg.xlsx') 
+df_reg.to_csv(directory+'df_reg.csv', sep=';')
+
+
+df_reg=df_reg[df_reg["Monthly Total Return"].notnull()]
+
+X = df_reg[["Mkt-RF","SMB","HML","Momentum"]]
+y = df_reg["Monthly Total Return"]
+
+
+
+# After deleting NaN in "Monthly Total Return", it works (i.e. Stata reg not required)
+model = sm.OLS(y, X).fit()
+
+model.summary()
+
+# need to import numpy when extracting elements
+coef_mktrf=model.params[0]
+coef_smb=model.params[1]
+coef_hml=model.params[2]
+coef_mom=model.params[3]
+
+'''
+[ERROR HANDLING]
+
+list(df_reg.select_dtypes(include=['object']).columns)
+df_reg['CUSIP'] = df_reg['CUSIP'].astype(str)
+df_reg['CUSIP'].str.strip
+
+df_reg.to_stata(directory+'df_reg.dta', version=117)
+df_reg.to_stata(directory+'df_reg.dta', version=114)
+
+
+[Stata result]
+
+reg monthlytotalreturn Mkt_RF SMB HML Momentum
+
+      Source |       SS       df       MS              Number of obs =  803950
+-------------+------------------------------           F(  4,803945) =    2.34
+       Model |  1.0307e+10     4  2.5769e+09           Prob > F      =  0.0524
+    Residual |  8.8391e+14803945  1.0995e+09           R-squared     =  0.0000
+-------------+------------------------------           Adj R-squared =  0.0000
+       Total |  8.8392e+14803949  1.0995e+09           Root MSE      =   33158
+
+------------------------------------------------------------------------------
+monthlytot~n |      Coef.   Std. Err.      t    P>|t|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+      Mkt_RF |   38.27628   14.59586     2.62   0.009      9.66887    66.88369
+         SMB |  -41.06492   20.78475    -1.98   0.048    -81.80235   -.3274893
+         HML |    38.2784   22.68506     1.69   0.092    -6.183571    82.74036
+    Momentum |   16.12649   13.17566     1.22   0.221    -9.697367    41.95034
+       _cons |   163.9298   40.34709     4.06   0.000      84.8508    243.0087
+------------------------------------------------------------------------------
+
+
+
+'''
+
+#%%
+'''
+ [Section 4.2: ]
+ 
+ - ◆◇  ◆◇
+ 
+  
+'''
+
+
+df_Momentum_Crisis=df_Momentum[(df_Momentum['Data Date - Security Monthly'] >= 200808) & (df_Momentum['Data Date - Security Monthly'] <= 200903)]
+df_FF_Crisis=df_FF[(df_FF['Data Date - Security Monthly'] >= 200808) & (df_FF['Data Date - Security Monthly'] <= 200903)]
+
+
+
+
+#%%
+'''
+ [Section 5: Import Compustat for the sake of model (3) and (4)]
+ 
+ - ◆◇ idiosyncratic risk ◆◇
+ 
+ 
+'''
+
+
+
+#%%
+'''
+ [Section 6: merge ESG & CRSP & Compustat & FFM]
+ 
+ - ◆◇ In theory, the final dataset contains #obs of df2008_cusip_final_CY * 8 ◆◇
+ - drop financial industry SIC:6000-6999
+ - drop market cap under 250M
+ 
+'''
+wPrice_wFFM
+
+PROVISIONAL=df_CRSP_Crisis_wPrice.merge(df2008_cusip_final_CY, on="CUSIP")
+#PROVISIONAL=df2008_cusip_final_CY.merge(df_CRSP_Crisis_wPrice, on="CUSIP")
+
+PROVISIONAL=PROVISIONAL.sort_values(by=['Company Name'])
+
+# to get unique values from Series, use .unique instead of set()
+PROVISIONAL.CUSIP.unique()
+
+PROVISIONAL.to_excel(directory+"PROVISIONAL.xlsx")
+
+# CSR2, CSR3, CSR4: Series format to list
+
+quartile_ESG = df2008_cusip_final_CY["ESG_Score"].quantile([.25, .5, .75]).tolist()
+quartile_Env = df2008_cusip_final_CY["Environment_Pillar_Score"].quantile([.25, .5, .75]).tolist()
+quartile_Soc = df2008_cusip_final_CY["Social_Pillar_Score"].quantile([.25, .5, .75]).tolist()
+
+
+# Conditional Replace
+
+PROVISIONAL.loc[quartile_ESG[0] > PROVISIONAL.ESG_Score, 'CSR1'] = 1
+PROVISIONAL.CSR1=PROVISIONAL.CSR1.fillna(0)
+
+PROVISIONAL.loc[(quartile_ESG[0] < PROVISIONAL.ESG_Score) & (PROVISIONAL.ESG_Score < quartile_ESG[1]), 'CSR2'] = 1
+PROVISIONAL.CSR2=PROVISIONAL.CSR2.fillna(0)
+
+PROVISIONAL.loc[(quartile_ESG[1] < PROVISIONAL.ESG_Score) & (PROVISIONAL.ESG_Score < quartile_ESG[2]), 'CSR3'] = 1
+PROVISIONAL.CSR3=PROVISIONAL.CSR3.fillna(0)
+
+PROVISIONAL.loc[PROVISIONAL.ESG_Score > quartile_ESG[2], 'CSR4'] = 1
+PROVISIONAL.CSR4=PROVISIONAL.CSR4.fillna(0)
+
+
+
+
+
+PROVISIONAL.loc[quartile_Env[0] > PROVISIONAL.Environment_Pillar_Score, 'Env1'] = 1
+PROVISIONAL.Env1=PROVISIONAL.Env1.fillna(0)
+
+PROVISIONAL.loc[(quartile_Env[0] < PROVISIONAL.Environment_Pillar_Score) & (PROVISIONAL.Environment_Pillar_Score < quartile_Env[1]), 'Env2'] = 1
+PROVISIONAL.Env2=PROVISIONAL.Env2.fillna(0)
+
+PROVISIONAL.loc[(quartile_Env[1] < PROVISIONAL.Environment_Pillar_Score) & (PROVISIONAL.Environment_Pillar_Score < quartile_Env[2]), 'Env3'] = 1
+PROVISIONAL.Env3=PROVISIONAL.Env3.fillna(0)
+
+PROVISIONAL.loc[PROVISIONAL.Environment_Pillar_Score > quartile_Env[2], 'Env4'] = 1
+PROVISIONAL.Env4=PROVISIONAL.Env4.fillna(0)
+
+
+
+
+PROVISIONAL.loc[quartile_Soc[0] > PROVISIONAL.Social_Pillar_Score, 'Soc1'] = 1
+PROVISIONAL.Soc1=PROVISIONAL.Soc1.fillna(0)
+
+PROVISIONAL.loc[(quartile_Soc[0] < PROVISIONAL.Social_Pillar_Score) & (PROVISIONAL.Social_Pillar_Score < quartile_Soc[1]), 'Soc2'] = 1
+PROVISIONAL.Soc2=PROVISIONAL.Soc2.fillna(0)
+
+PROVISIONAL.loc[(quartile_Soc[1] < PROVISIONAL.Social_Pillar_Score) & (PROVISIONAL.Social_Pillar_Score < quartile_Soc[2]), 'Soc3'] = 1
+PROVISIONAL.Soc3=PROVISIONAL.Soc3.fillna(0)
+
+PROVISIONAL.loc[PROVISIONAL.Social_Pillar_Score > quartile_Soc[2], 'Soc4'] = 1
+PROVISIONAL.Soc4=PROVISIONAL.Soc4.fillna(0)
+
+
+
+
+
+len(set(PROVISIONAL["CUSIP"]))
+
+
+
+#excel check
+PROVISIONAL.to_excel(directory+"PROVISIONAL_Quantile.xlsx")
+df2008_cusip_final_CY.to_excel(directory+"df2008_cusip_final_CY.xlsx")
+
+
+
+# ValueError: Writing general object arrays is not supported
+
+list(PROVISIONAL.select_dtypes(include=['object']).columns) 
+PROVISIONAL['RIC'] = PROVISIONAL['RIC'].astype(str)
+PROVISIONAL['CUSIP'] = PROVISIONAL['CUSIP'].astype(str)
+PROVISIONAL['Company Name'] = PROVISIONAL['Company Name'].astype(str)
+PROVISIONAL['Year'] = PROVISIONAL['Year'].astype(str)
+PROVISIONAL['Month'] = PROVISIONAL['Month'].astype(str)
+
+
+PROVISIONAL.to_stata(directory+'PROVISIONAL.dta') 
+
+
+
+#%%
+'''
+ [Section 7: Regression - Stata or Python (triangulate?)]
+ 
+ - ◆◇ BALANCED PANEL REQUIRED EXPLICITLY IN PAPER ◆◇
+ - https://towardsdatascience.com/simple-and-multiple-linear-regression-in-python-c928425168f9
+ - https://stackoverflow.com/questions/24195432/fixed-effect-in-pandas-or-statsmodels
+ 
+'''
+
+# dfstata=pd.read_stata("ESG_monthlyreturn_merged.dta")
+# dfstata2=pd.read_stata("ESG_CrisisPeriod.dta")
+
+
+
+X = PROVISIONAL["ESG_Score"]
+X1 = PROVISIONAL["Environment_Pillar_Score"]
+X2 = PROVISIONAL["Social_Pillar_Score"]
+y = PROVISIONAL["Monthly Total Return"]
+
+model = sm.OLS(y, X).fit()
+model2 = sm.OLS(X1, X).fit()
+
+model.summary()
+model2.summary()
+
+plt.plot(X,y)
+plt.plot(X,X1, color='green', marker='o')
+plt.plot(X,X1, 'bo')
