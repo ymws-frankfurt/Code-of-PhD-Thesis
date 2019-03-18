@@ -1,615 +1,1355 @@
+# -*- coding: utf-8 -*-
+"""
+ [Section 0: Envrironment setting]
 
+ - ◆◇ fill in zero: print(str(1).zfill(4)) ◆◇
+ 
+ - ◆◇ To print rows with certain values ◆◇
+     => df.loc[df['CUSIP'] == 354100]
+ 
+ - ◆◇ notnull more useful than drop ◆◇
+   => FF_Pre60Return_AND_Pre60FourFactors_filtered=FF_Pre60Return_AND_Pre60FourFactors_filtered[FF_Pre60Return_AND_Pre60FourFactors_filtered["Monthly Total Return"].notnull()]
+
+ - ◆◇ Check no #obs reduction in MODEL1234_Crisis.loc[MODEL1234_Crisis['CUSIP'].isin(FF_CUSIP_list_set_union)] ◆◇
+
+ - ◆◇ Sec6.3 dropps period < 8-idio_k ◆◇
+"""
 
 import pandas as pd
 import eikon as ek
-import matplotlib.pyplot as plt
-import numpy as np
+#import matplotlib.pyplot as plt
+import numpy as np # needed for log transformation
 import statsmodels.api as sm
-from linearmodels.panel import PanelOLS
+#from linearmodels.panel import PanelOLS
 
 ek.set_app_key('a11a2281b8cd45b5b65b935a584aeec3dc957f43')
 
-app_id = ek.get_app_key()
-
-print(app_id)
-
+#app_id = ek.get_app_key()
 
 directory="C:\\Users\\s9194518\\Python\\Lins2017\\"
 
 
-del app_id
+FCY_ESG="CY2007"
+FCY_COMPS_Acc="CY2007"
+idio_k=0 # subtract from denominator for estimating idio risk
 
 #%%
 '''
- [Section 1: extract RIC using CUSIP - Goal is creating convert table df1]
+ [Section 1.1: TR data - Convert table (CUSIP and RIC)]
  
  - ◆◇ Stock Exchange Code: only 11-19 ◆◇
  
- - ◆◇ if table 1 used, 3 rows in the last are noise: automatically removed later? ◆◇
- 
- - "cusip_DF[:4000]" together with "debug=True" (TR.RIC) works!!!
- 
- - USE CONVERT TABLE FROM EXCEL PIVOT: set("list of CUSIP table") is bad as random numbers in some rows
- 
- - data = ek.get_symbology(["G5753U112"], from_symbol_type="CUSIP", bestMatch=False, raw_output=True) 
+ - Use excel pivot for creating a CUSIP list: 
+   set("list of CUSIP table") is not recommended as concatenated numbers are generated
  
  - df1_drop=df1.dropna(subset=['RIC'], inplace=True) not working because not recognized as NA
  
-
 '''
 
+#◇ Add zeros before CUSIP number in excel DOES NOT MAKE DIFFERENCE IN THE IMPORTED VALUE
+# created from "CRSPCOMPS_Merged_200308_200903.xlsx" or ".xlsx" after sorting dates 200808-200903
+TR_convtab = pd.read_excel(directory+"COMPSCAPIQ_200308_200903_CUSIP.xlsx", sheet_name="CUSIP") # "COMPSCAPIQ_200308_200903_CUSIP.xlsx" or "CRSPCOMPS_Merged_200308_200903_CUSIP.xlsx"
 
-df_convtab = pd.read_excel(directory+"CUSIP_into_TR2.xlsx", sheet_name="Tabelle1") #◇ 1 or 2
+TR_cusip_str=TR_convtab.applymap(str)
+TR_list_cusip_str=TR_cusip_str.CUSIP.tolist()
 
-df_cusip_str=df_convtab.applymap(str)
-list_cusip_str=df_cusip_str.CUSIP.tolist()
-
-df1A, err = ek.get_data(list_cusip_str[:5000], ['TR.RIC'], debug=True)
+df1A, err = ek.get_data(TR_list_cusip_str[:5000], ['TR.RIC'], debug=True) # "debug=True" may work for connection error
 df1A.columns.values[0]='CUSIP' 
 
-df1B, err = ek.get_data(list_cusip_str[5001:10000], ['TR.RIC'], debug=True)
+df1B, err = ek.get_data(TR_list_cusip_str[5001:10000], ['TR.RIC'], debug=True)
 df1B.columns.values[0]='CUSIP' 
 
-df1C, err = ek.get_data(list_cusip_str[10001:], ['TR.RIC'], debug=True)
+df1C, err = ek.get_data(TR_list_cusip_str[10001:], ['TR.RIC'], debug=True)
 df1C.columns.values[0]='CUSIP' 
 
-frames_converttab = [df1A, df1B, df1C]
+TR_frames_converttab = [df1A, df1B, df1C]
+#TR_frames_converttab = [df1A, df1B]
 
-df_ConvertTable = pd.concat(frames_converttab) # df_ConvertTable not used below
-
-del frames_converttab, df_convtab, df_cusip_str, list_cusip_str
-
-'''
-[No more needed]
-
-cusip_STR_A=cusip_DF[:5000].to_string(index=False,header=False) 
-cusip_STR_B=cusip_DF[5001:10000].to_string(index=False,header=False) 
-cusip_STR_C=cusip_DF[10001:].to_string(index=False,header=False) 
-
-cusip_STR2_A=cusip_STR_A.split("\n")
-cusip_STR2_B=cusip_STR_B.split("\n")
-cusip_STR2_C=cusip_STR_C.split("\n")
+TR_ConvertTable = pd.concat(TR_frames_converttab) 
+#TR_ConvertTable["CUSIP"]=TR_ConvertTable["CUSIP"].astype(str) # both int and str in the column "CUSIP"
 
 
-#Index 3999:19239Y108 Part A
-#Index 4000:19243A104 Part B
-#Index 6209:Y93691106 Part B
+del TR_frames_converttab, TR_convtab, TR_cusip_str, TR_list_cusip_str
 
-
-cusip_STR_nospace_A=[]
-cusip_STR_nospace_B=[]
-cusip_STR_nospace_C=[]
-
-for i in range(len(cusip_STR2_A)):
-    cusip_STR_nospace_A.insert(i,cusip_STR2_A[i].strip()) #.replace(" ","").replace("\t","") ??????????
-
-for i in range(len(cusip_STR2_B)):
-    cusip_STR_nospace_B.insert(i,cusip_STR2_B[i].strip()) 
-
-for i in range(len(cusip_STR2_C)):
-    cusip_STR_nospace_C.insert(i,cusip_STR2_C[i].strip())
-    
-# Not working so above stringing is needed: df1Aa, err = ek.get_data(cusip_DF.head(4000)["CUSIP"].tolist(), ['TR.RIC'], raw_output=False)
-
-
-
-
-'''
 
 #%%
 '''
- [Section 2: extract ESG scores using df_ConvertTable (but in batches df1A and df1B)]
+ [Section 1.2: TR data - Extract ESG scores using df1A, df1B, df1C]
  
- - ◆◇ FY is disabled for now ◆◇
- 
+ - ◆◇ FY = 2006, 2007 or 2008 ◆◇
  
 '''
 
+TR_mylistA=[] ; TR_mylistB=[] ; TR_mylistC=[]
 
-mylistA=[]
-mylistB=[]
-mylistC=[]
-
-tempA = df1A["RIC"].tolist()
-tempB = df1B["RIC"].tolist()
-tempC = df1C["RIC"].tolist()
+TR_tempA = df1A["RIC"].tolist() ; TR_tempB = df1B["RIC"].tolist() ; TR_tempC = df1C["RIC"].tolist()
 
 
 del df1A, df1B, df1C
 
 # temp cannot be used as instruments because it includes blank cells
 
-for j in range(len(tempA)):
+for j in range(len(TR_tempA)):
     
-    if tempA[j]=="":
-        mylistA.insert(j,"0")
+    if TR_tempA[j]=="":
+        TR_mylistA.insert(j,"0")
     else:
-        mylistA.insert(j,tempA[j])
+        TR_mylistA.insert(j,TR_tempA[j])
 
 
-for j in range(len(tempB)):
+for j in range(len(TR_tempB)):
     
-    if tempB[j]=="":
-        mylistB.insert(j,"0")
+    if TR_tempB[j]=="":
+        TR_mylistB.insert(j,"0")
     else:
-        mylistB.insert(j,tempB[j])
+        TR_mylistB.insert(j,TR_tempB[j])
 
 
-for j in range(len(tempC)):
+for j in range(len(TR_tempC)):
     
-    if tempC[j]=="":
-        mylistC.insert(j,"0")
+    if TR_tempC[j]=="":
+        TR_mylistC.insert(j,"0")
     else:
-        mylistC.insert(j,tempC[j])
+        TR_mylistC.insert(j,TR_tempC[j])
 
 # Too many missing values if using parameters={'SDate':'2008-01-01', 'EDate':'2009-12-31'}, 
 # when there is actually data (e.g. DE.N) => try CY and separate each year
 
 
 # frequency of zeros
-print("mylistA.count0 is "+str(mylistA.count("0"))+" or "+str(mylistA.count("0")/len(mylistA)))
-print("mylistB.count0 is "+str(mylistB.count("0"))+" or "+str(mylistB.count("0")/len(mylistB)))
-print("mylistC.count0 is "+str(mylistC.count("0"))+" or "+str(mylistC.count("0")/len(mylistC)))
-
-# exclude 'TR.TRESGCScore',
-fields_list=['TR.TRESGScore','TR.EnvironmentPillarScore','TR.SocialPillarScore','TR.GovernancePillarScore',]
+print("TR_mylistA.count0 is "+str(TR_mylistA.count("0"))+" or "+str(TR_mylistA.count("0")/len(TR_mylistA)))
+print("TR_mylistB.count0 is "+str(TR_mylistB.count("0"))+" or "+str(TR_mylistB.count("0")/len(TR_mylistB)))
+print("TR_mylistC.count0 is "+str(TR_mylistC.count("0"))+" or "+str(TR_mylistC.count("0")/len(TR_mylistC)))
 
 
-df2008A_CY,err = ek.get_data(instruments=mylistA, fields=fields_list , parameters={'Period': 'CY2008'}, raw_output=False)
-#df2008A_FY,err = ek.get_data(instruments=mylistA, fields=fields_list , parameters={'Period': 'FY2008'}, raw_output=False)
+fields_list=['TR.TRESGCScore','TR.TRESGScore','TR.EnvironmentPillarScore','TR.SocialPillarScore','TR.GovernancePillarScore',]
 
 
-df2008B_CY,err = ek.get_data(instruments=mylistB, fields=fields_list , parameters={'Period': 'CY2008'}, raw_output=False)
-#df2008B_FY,err = ek.get_data(instruments=mylistB, fields=fields_list , parameters={'Period': 'FY2008'}, raw_output=False)
+TR_PartA,err = ek.get_data(instruments=TR_mylistA, fields=fields_list , parameters={'Period': FCY_ESG}, raw_output=False)
+
+TR_PartB,err = ek.get_data(instruments=TR_mylistB, fields=fields_list , parameters={'Period': FCY_ESG}, raw_output=False)
+
+TR_PartC,err = ek.get_data(instruments=TR_mylistC, fields=fields_list , parameters={'Period': FCY_ESG}, raw_output=False)
+
+#TR_frames = [TR_PartA, TR_PartB]
+TR_frames = [TR_PartA, TR_PartB, TR_PartC]
+
+TR_woCUSIP= pd.concat(TR_frames)
 
 
-df2008C_CY,err = ek.get_data(instruments=mylistC, fields=fields_list , parameters={'Period': 'CY2008'}, raw_output=False)
-#df2008C_FY,err = ek.get_data(instruments=mylistC, fields=fields_list , parameters={'Period': 'FY2008'}, raw_output=False)
+TR_woCUSIP['FCY_ESG']=FCY_ESG 
+TR_woCUSIP.columns.values[0]='RIC'
 
 
-frames_CY = [df2008A_CY, df2008B_CY, df2008C_CY]
-#frames_FY = [df2008A_FY, df2008B_FY, df2008C_FY]
-
-df2008_CY= pd.concat(frames_CY)
-#df2008_FY= pd.concat(frames_FY)
-
-df2008_CY['CY_of_CSR']=2008
-df2008_CY.columns.values[0]='RIC'
-
-#df2008_FY['FY_of_CSR']=2008
-#df2008_FY.columns.values[0]='RIC'
-
-df2008_CY.count(axis="index")
-#df2008_FY.count(axis="index")
+TR_woCUSIP.count(axis="index")
 
 
-# "Vlookup"
-df2008_cusip_CY=df2008_CY.merge(df_ConvertTable, on="RIC")  # automatically dropping RIC=0 !
-#df2008_cusip_FY=df2008_FY.merge(df_ConvertTable, on="RIC")  # automatically dropping RIC=0 !
+#%%
+'''
+ [Section 1.3: TR data - Merge]
+ - 
+'''
+ 
+TR_wCUSIP_wBlank=TR_woCUSIP.merge(TR_ConvertTable, on="RIC")  # automatically dropping RIC=0 !
 
-df2008_cusip_final_CY=df2008_cusip_CY.dropna(subset=['ESG Score']) # , inplace=True
-#df2008_cusip_final_FY=df2008_cusip_FY.dropna(subset=['ESG Score']) # , inplace=True
+
+TR_wCUSIP_wBlank.count(axis="index")
+
+
+TR_wCUSIP=TR_wCUSIP_wBlank.dropna(subset=['ESG Score']) # , inplace=True
 
 
 # Rename
-
-df2008_cusip_final_CY.rename(columns={'ESG Score':'ESG_Score','Environment Pillar Score':'Environment_Pillar_Score','Social Pillar Score':'Social_Pillar_Score','Governance Pillar Score':'Governance_Pillar_Score'}, inplace=True)
-#df2008_cusip_final_FY.rename(columns={'ESG Score':'ESG_Score','Environment Pillar Score':'Environment_Pillar_Score','Social Pillar Score':'Social_Pillar_Score','Governance Pillar Score':'Governance_Pillar_Score'}, inplace=True)
+TR_wCUSIP.rename(columns={'ESG Combined Score':'ESG_Combined_Score','ESG Score':'ESG_Score','Environment Pillar Score':'Environment_Pillar_Score','Social Pillar Score':'Social_Pillar_Score','Governance Pillar Score':'Governance_Pillar_Score'}, inplace=True)
 
 
-df2008_cusip_final_CY.describe()
+TR_wCUSIP.describe()
+TR_wCUSIP.count(axis="index")
 
 
-del mylistA, mylistB, mylistC, tempA, tempB, tempC, j, fields_list
-del df2008A_CY, df2008B_CY, df2008C_CY
-#del df2008A_FY, df2008B_FY, df2008C_FY
 
-del df2008_cusip_CY, df2008_CY, frames_CY 
-#del df2008_cusip_FY, df2008_FY, frames_FY
+# add zeros!!!: DISABLE THIS 
+TR_wCUSIP["CUSIP"]=TR_wCUSIP["CUSIP"].astype(str)
+TR_wCUSIP["CUSIP"]=TR_wCUSIP["CUSIP"].str.zfill(9)
 
 
-'''
-#Python merging is preferred over Stata
 
-df2008_cusip_final_CY.to_stata(directory+'ESG_CrisisPeriod_CY.dta') 
-df2008_cusip_final_FY.to_stata(directory+'ESG_CrisisPeriod_FY.dta') 
+del TR_mylistA, TR_mylistB, TR_mylistC, TR_tempA, TR_tempB, TR_tempC, j, fields_list
 
-'''
+del TR_PartA, TR_PartB, TR_PartC
+
+del TR_wCUSIP_wBlank, TR_frames
+
+
 #%%
 '''
- [Section 3: Import CRSP: Crisis Period (Aug2008 - March2009) & Momentum (Aug2007 - July2008 stock price)]
+ [Section 2.1: CRSP data - Crisis Period return (Aug2008 - March2009)]
  
  -  ◆◇ Return data not only avaiable in CRSP/Comp but also in Compustat/CapitalIQ with more data ◆◇
- - "CRSP_Crisis_Period_Return2.xlsx" is from Compustat/CapitalIQ
  
-  -  ◆◇ Too much obs drop from df_CRSP_Crisis to df_CRSP_Crisis2: Why?? ◆◇
+ -  ◆◇ Little diff of #obs btw CRSP_Crisis_Return & CRSP_CrisisReturn_AND_Pre12FirmMom ◆◇
  
+ -  ◆◇ Compustat Pricing Data Versus CRSP-Compustat Merged database ◆◇
+   https://wrds-www.wharton.upenn.edu/pages/support/applications/risk-and-valuation-measures/market-book-mb-ratio/
+   
 '''
+#◇ Import "COMPSCAPIQ_200308_200903.xlsx" or "CRSPCOMPS_Merged_200308_200903.xlsx"
+Return_Price_All = pd.read_excel(directory+"COMPSCAPIQ_200308_200903.xlsx", sheet_name="WRDS") 
 
-# [Crisis Period (Aug2008 - March2009)]
 
-CRSP_Crisis = pd.read_excel(directory+"CRSP_Crisis_Period_Return2.xlsx", sheet_name="WRDS") #◇ 1 or 2
+# ★☆ CUSIP: zeros ☆★
+Return_Price_All["CUSIP"]=Return_Price_All["CUSIP"].astype(str)
+Return_Price_All["CUSIP"]=Return_Price_All["CUSIP"].str.zfill(9)
 
-df_CRSP_Crisis = pd.DataFrame(CRSP_Crisis, columns= ['CUSIP','Company Name','Monthly Total Return','Data Date - Security Monthly','Standard Industry Classification Code']) # ,'Price - Close - Monthly'
 
-del CRSP_Crisis
+CRSP_Crisis_Return = pd.DataFrame(Return_Price_All, columns= ['CUSIP','Company Name','Monthly Total Return','Date','Standard Industry Classification Code','Stock Exchange Code'])
+
+
+CRSP_Crisis_Return=CRSP_Crisis_Return[(CRSP_Crisis_Return['Date'] >= 200808) & (CRSP_Crisis_Return['Date'] <= 200903)]
+
+# ☆☆ Adjust unit of return ☆☆
+CRSP_Crisis_Return['Monthly Total Return']*=1/100
 
 
 # For df, .astype(str) should be used instead of str()
-df_CRSP_Crisis["Period_1-8"] = df_CRSP_Crisis.groupby("CUSIP")["Data Date - Security Monthly"].rank(ascending=1,method='dense')
-df_CRSP_Crisis['SIC'] = df_CRSP_Crisis['Standard Industry Classification Code'].astype(str).str[:2]
-
-#df_CRSP_Crisis['Year'] = df_CRSP_Crisis['Data Date - Security Monthly'].astype(str).str[0:4] 
-#df_CRSP_Crisis['Month'] = df_CRSP_Crisis['Data Date - Security Monthly'].astype(str).str[4:6]
-
+CRSP_Crisis_Return["Period1to8"] = CRSP_Crisis_Return.groupby("CUSIP")["Date"].rank(ascending=1,method='dense')
+CRSP_Crisis_Return['SIC'] = CRSP_Crisis_Return['Standard Industry Classification Code'].astype(str).str[:2]
 
 
 # CHECK OVERALL
-df_CRSP_Crisis.count(axis="index")
-df_CRSP_Crisis.CUSIP.isna().sum() # 109606+566 = 110172
+CRSP_Crisis_Return.count(axis="index")
+CRSP_Crisis_Return.CUSIP.isna().sum() # 109606+566 = 110172
 
 
 # CHECK NULL: https://markhneedham.com/blog/2017/07/05/pandas-find-rows-where-columnfield-is-null/
-
-null_columns=df_CRSP_Crisis.columns[df_CRSP_Crisis.isnull().any()]
+null_columns=CRSP_Crisis_Return.columns[CRSP_Crisis_Return.isnull().any()]
 
 # Single column
-print(df_CRSP_Crisis[df_CRSP_Crisis["CUSIP"].isnull()][null_columns])                # "#DIV/0!" is the reason for 566 rows
-print(df_CRSP_Crisis[df_CRSP_Crisis['Standard Industry Classification Code'].isnull()][null_columns])
+print(CRSP_Crisis_Return[CRSP_Crisis_Return["CUSIP"].isnull()][null_columns])                # "#DIV/0!" is the reason for 566 rows
+print(CRSP_Crisis_Return[CRSP_Crisis_Return['Standard Industry Classification Code'].isnull()][null_columns])
+
 
 # Overall
-print(df_CRSP_Crisis[df_CRSP_Crisis.isnull().any(axis=1)][null_columns].head(100))  
+print(CRSP_Crisis_Return[CRSP_Crisis_Return.isnull().any(axis=1)][null_columns].head(10))  
 
+#%%
+'''
+ [Section 2.2: CRSP data - Firm-level Momentum (Aug2007 - July2008 stock price)]
+ 
+'''
 
 # [Momentum (Aug2007 - July2008)]
 
-CRSP_Pre = pd.read_excel(directory+"CRSP_Pre_Crisis_Price2.xlsx", sheet_name="WRDS") #◇ 1 or 2
-df_CRSP_Pre = pd.DataFrame(CRSP_Pre, columns= ['CUSIP','Data Date - Security Monthly','Price - Close - Monthly'])
+CRSP_Pre12_FirmMom = pd.DataFrame(Return_Price_All, columns= ['CUSIP','Date','Price - Close - Monthly'])
 
-del CRSP_Pre
+CRSP_Pre12_FirmMom=CRSP_Pre12_FirmMom[(CRSP_Pre12_FirmMom['Date'] >= 200708) & (CRSP_Pre12_FirmMom['Date'] <= 200807)]
 
-df_CRSP_Pre.count(axis="index")
-
-Price_2008Jul = df_CRSP_Pre.loc[df_CRSP_Pre.groupby(["CUSIP"])["Data Date - Security Monthly"].idxmax()]
-Price_2007Aug = df_CRSP_Pre.loc[df_CRSP_Pre.groupby(["CUSIP"])["Data Date - Security Monthly"].idxmin()]
+CRSP_Pre12_FirmMom.count(axis="index")
 
 
-Price_2008Jul.rename(columns={'Price - Close - Monthly':'Price_2008July'}, inplace=True) # "Data Date - Security Monthly":"Date", is unnecessary
-Price_2007Aug.rename(columns={'Price - Close - Monthly':'Price_2007Aug'}, inplace=True)  # "Data Date - Security Monthly":"Date", is unnecessary
+CRSP_Pre12_FirmMom_2008Jul = CRSP_Pre12_FirmMom.loc[CRSP_Pre12_FirmMom.groupby(["CUSIP"])["Date"].idxmax()]
+CRSP_Pre12_FirmMom_2007Aug = CRSP_Pre12_FirmMom.loc[CRSP_Pre12_FirmMom.groupby(["CUSIP"])["Date"].idxmin()]
+
+
+CRSP_Pre12_FirmMom_2008Jul.rename(columns={'Price - Close - Monthly':'Price_2008July'}, inplace=True) 
+CRSP_Pre12_FirmMom_2007Aug.rename(columns={'Price - Close - Monthly':'Price_2007August'}, inplace=True) 
 
 
 # Drop a row or observation by condition: df[df.Name != 'Alisa']
-Price_2008Jul_only20080731=Price_2008Jul[Price_2008Jul["Data Date - Security Monthly"] == 20080731]
-Price_2007Aug_only20070831=Price_2007Aug[Price_2007Aug["Data Date - Security Monthly"] == 20070831]
+CRSP_Pre12_FirmMom_only200807=CRSP_Pre12_FirmMom_2008Jul[CRSP_Pre12_FirmMom_2008Jul["Date"] == 200807]
+CRSP_Pre12_FirmMom_only200708=CRSP_Pre12_FirmMom_2007Aug[CRSP_Pre12_FirmMom_2007Aug["Date"] == 200708]
 
 
 # drop unnecessary column "Date" before appending
-Price_2008Jul_only20080731=Price_2008Jul_only20080731.drop(columns=["Data Date - Security Monthly"])
-Price_2007Aug_only20070831=Price_2007Aug_only20070831.drop(columns=["Data Date - Security Monthly"])
+CRSP_Pre12_FirmMom_only200807=CRSP_Pre12_FirmMom_only200807.drop(columns=["Date"])
+CRSP_Pre12_FirmMom_only200708=CRSP_Pre12_FirmMom_only200708.drop(columns=["Date"])
 
 
-del Price_2008Jul, Price_2007Aug
-
-
-
-
-# [Merge Momentum to Crisis Period]
-
-df_CRSP_Crisis2=df_CRSP_Crisis.merge(Price_2008Jul_only20080731, on="CUSIP")
-df_CRSP_Crisis_wPrice=df_CRSP_Crisis2.merge(Price_2007Aug_only20070831, on="CUSIP")
-
-del df_CRSP_Crisis2, Price_2008Jul_only20080731, Price_2007Aug_only20070831
-
-# Momentum is net return analogous to raw return
-df_CRSP_Crisis_wPrice['Momentum_firm'] = df_CRSP_Crisis_wPrice['Price_2008July']/df_CRSP_Crisis_wPrice['Price_2007Aug']-1
-
-
-df_CRSP_Crisis_wPrice.count(axis="index")
-
-
-
-
-'''
-[Checking with Excel]
-
-df_CRSP_Crisis_wPrice.to_excel(directory+"Check_output_post.xlsx")
-df_CRSP_Crisis.to_excel(directory+"Check_output_pre.xlsx")
-
-
- - ◆◇ droping blank prices unnecessary because "merge" already done ◆◇
-
-df_CRSP_Crisis_wPrice_dropped=df_CRSP_Crisis_wPrice[df_CRSP_Crisis_wPrice.Date == 20070831]
-
-'''
-
-#%%
-'''
- [Section 4.1: Import Fama French loadings & Momentum factor and then regress to get coefficients]
- 
- - ◆◇ Data Date or Fiscal Year ◆◇
- - used the coefficients from regression in Python but need to check that it is consistent with Stata
-  
-'''
-
-WEIGHTED VALUE INDEX
-Import value of momentum FF crisis period
-
-# [Importing FF, Momentum, Raw returns (60 months: 2003August-2008July) and append]
-
-df_Return_60 = pd.read_excel(directory+"Compustat_Return_60months_rev.xlsx", sheet_name="WRDS") #◇
-df_Momentum = pd.read_excel(directory+"Fama_French_HP\\"+"F-F_Momentum_Factor.xlsx", sheet_name="Tabelle1") #◇
-df_FF = pd.read_excel(directory+"Fama_French_HP\\"+"F-F_Research_Data_Factors.xlsx", sheet_name="Tabelle1") #◇
-
-
-# Keeping columns of dataframe
-df_Return_60 = df_Return_60[['CUSIP','Data Date - Security Monthly2','Monthly Total Return']]
-
-
-df_Return_60.rename(columns={"Data Date - Security Monthly2":"Data Date - Security Monthly"}, inplace=True)
-df_Momentum.rename(columns={"YearMonth":"Data Date - Security Monthly"}, inplace=True)
-df_FF.rename(columns={"YearMonth":"Data Date - Security Monthly"}, inplace=True)
-
-
-
-df_Momentum_60=df_Momentum[(df_Momentum['Data Date - Security Monthly'] >= 200308) & (df_Momentum['Data Date - Security Monthly'] <= 200807)]
-df_FF_60=df_FF[(df_FF['Data Date - Security Monthly'] >= 200308) & (df_FF['Data Date - Security Monthly'] <= 200807)]
-
-
-# Merging FF and Momentum factors
-df_temp = df_Return_60.merge(df_FF_60, on="Data Date - Security Monthly")
-df_reg = df_temp.merge(df_Momentum_60, on="Data Date - Security Monthly")
-
-# need to string CUSIP before sorting; otherwise error: but then another error is .astype 
-# i.e. in creating DTA file, "Fixed width strings in Stata .dta files are limited to 244 (or fewer) characters.  Column 'CUSIP' does not satisfy this restriction."
-#df_temp.CUSIP=df_temp.CUSIP.astype(str)                 
-#df_reg=df_temp.sort_values(by=['CUSIP','Data Date - Security Monthly'])
-
-del df_temp
-
-'''
-Why use "Compustat_Return_60months_rev.xlsx" instead of "Compustat_Return_60months.xlsx" ???
-
-Because if I run the following:
-df_Return_60['Data Date - Security Monthly'] = df_Return_60['Data Date - Security Monthly'].astype(str).str[0:6] 
-
-I get the error:
-ValueError: You are trying to merge on object and int64 columns. If you wish to proceed you should use pd.concat
-
-'''
-
-
-# Cursory treatment for too large dataset
-
-df_FFandMom = df_FF_60.merge(df_Momentum_60, on="Data Date - Security Monthly")
-df_FFandMom.to_stata(directory+'Stata\\'+'df_FFandMom.dta') 
-
-
-df_Return_60['CUSIP'] = df_Return_60['CUSIP'].astype(str)
-df_Return_60['CUSIP'].str.strip
-df_Return_60.to_stata(directory+'df_Return_60.dta', version=117) 
-
-
-# even cursory treatment does not work; on the other hand, what I need is the coefficients only so run here, and check stata later
-
-
-
-
-# [regress]
-
-
-df_reg.to_stata(directory+'df_reg.dta', write_index=False) 
-df_reg.to_excel(directory+'df_reg.xlsx') 
-df_reg.to_csv(directory+'df_reg.csv', sep=';')
-
-
-df_reg=df_reg[df_reg["Monthly Total Return"].notnull()]
-
-X = df_reg[["Mkt-RF","SMB","HML","Momentum"]]
-y = df_reg["Monthly Total Return"]
-
-
-
-# After deleting NaN in "Monthly Total Return", it works (i.e. Stata reg not required)
-model = sm.OLS(y, X).fit()
-
-model.summary()
-
-# need to import numpy when extracting elements
-coef_mktrf=model.params[0]
-coef_smb=model.params[1]
-coef_hml=model.params[2]
-coef_mom=model.params[3]
-
-'''
-[ERROR HANDLING]
-
-list(df_reg.select_dtypes(include=['object']).columns)
-df_reg['CUSIP'] = df_reg['CUSIP'].astype(str)
-df_reg['CUSIP'].str.strip
-
-df_reg.to_stata(directory+'df_reg.dta', version=117)
-df_reg.to_stata(directory+'df_reg.dta', version=114)
-
-
-[Stata result]
-
-reg monthlytotalreturn Mkt_RF SMB HML Momentum
-
-      Source |       SS       df       MS              Number of obs =  803950
--------------+------------------------------           F(  4,803945) =    2.34
-       Model |  1.0307e+10     4  2.5769e+09           Prob > F      =  0.0524
-    Residual |  8.8391e+14803945  1.0995e+09           R-squared     =  0.0000
--------------+------------------------------           Adj R-squared =  0.0000
-       Total |  8.8392e+14803949  1.0995e+09           Root MSE      =   33158
-
-------------------------------------------------------------------------------
-monthlytot~n |      Coef.   Std. Err.      t    P>|t|     [95% Conf. Interval]
--------------+----------------------------------------------------------------
-      Mkt_RF |   38.27628   14.59586     2.62   0.009      9.66887    66.88369
-         SMB |  -41.06492   20.78475    -1.98   0.048    -81.80235   -.3274893
-         HML |    38.2784   22.68506     1.69   0.092    -6.183571    82.74036
-    Momentum |   16.12649   13.17566     1.22   0.221    -9.697367    41.95034
-       _cons |   163.9298   40.34709     4.06   0.000      84.8508    243.0087
-------------------------------------------------------------------------------
-
-
-
-'''
-
-#%%
-'''
- [Section 4.2: ]
- 
- - ◆◇  ◆◇
- 
-  
-'''
-
-
-df_Momentum_Crisis=df_Momentum[(df_Momentum['Data Date - Security Monthly'] >= 200808) & (df_Momentum['Data Date - Security Monthly'] <= 200903)]
-df_FF_Crisis=df_FF[(df_FF['Data Date - Security Monthly'] >= 200808) & (df_FF['Data Date - Security Monthly'] <= 200903)]
-
+del CRSP_Pre12_FirmMom_2008Jul, CRSP_Pre12_FirmMom_2007Aug, CRSP_Pre12_FirmMom
 
 
 
 #%%
 '''
- [Section 5: Import Compustat for the sake of model (3) and (4)]
- 
- - ◆◇ idiosyncratic risk ◆◇
- 
+ [Section 2.3: CRSP data - Merge crisis period return & firm-level momentum]
  
 '''
 
+CRSP_CrisisReturn_AND_Pre12FirmMom=CRSP_Crisis_Return.merge(CRSP_Pre12_FirmMom_only200807, on="CUSIP")
+CRSP_CrisisReturn_AND_Pre12FirmMom=CRSP_CrisisReturn_AND_Pre12FirmMom.merge(CRSP_Pre12_FirmMom_only200708, on="CUSIP")
+
+del CRSP_Pre12_FirmMom_only200807, CRSP_Pre12_FirmMom_only200708, CRSP_Crisis_Return
+
+
+# Momentum is net return analogous to raw return: ☆☆ no need for adjustment ☆☆
+CRSP_CrisisReturn_AND_Pre12FirmMom['Momentum_firm'] = CRSP_CrisisReturn_AND_Pre12FirmMom['Price_2008July']/CRSP_CrisisReturn_AND_Pre12FirmMom['Price_2007August']-1
+
+
+CRSP_CrisisReturn_AND_Pre12FirmMom.count(axis="index")
+
+
+# keep necessary columns
+CRSP_CrisisReturn_AND_Pre12FirmMom=CRSP_CrisisReturn_AND_Pre12FirmMom[["CUSIP","Company Name","Date","Monthly Total Return","Period1to8","SIC","Momentum_firm","Stock Exchange Code"]]
+
+
+#◆ check excel
+CRSP_CrisisReturn_AND_Pre12FirmMom.to_excel(directory+"Excel Check\\"+"CRSP_CrisisReturn_AND_Pre12FirmMom.xlsx", index=False)
 
 
 #%%
 '''
- [Section 6: merge ESG & CRSP & Compustat & FFM]
+ [Section 3: Compustat data - for dropping obs and model (3) and (4)]
  
- - ◆◇ In theory, the final dataset contains #obs of df2008_cusip_final_CY * 8 ◆◇
+ - ◆◇ FY = 2008 or 2007 ◆◇
+ 
+ 
+ [Variables created in Excel faster than python]
+try:
+    COMPS_fy200X[COMPS_fy200X["Common Shares Outstanding"]*COMPS_fy200X["Price Close - Annual - Calendar"]]
+except:
+    pass
+    
+ 
+ - MKVALT (>MKVALTQ):
+   million: http://finabase.blogspot.com/2012/10/units-in-compustat-hundreds-thousands.html  
+   http://www.kaikaichen.com/?p=248
+   http://finabase.blogspot.com/2012/10/units-in-compustat-hundreds-thousands.html
+   
+   MV1 = PRCCQ * CSHOQ
+   MV2 = MKVALTQ
+   
+   *MV1 and MV2 are quite close, but many MV2 are missing. 
+   
+ - Long term debt: DLTT/AT
+ - Debt in current liabilities: DLC/AT
+ 
+ - Cash and marketable securities: CHE/AT (approx.)
+ 
+ - Profitability: OIBDP/AT (Operating Income Before Depreciation rather than after)
+ 
+ - B/M: 
+    http://finabase.blogspot.com/2011_02_27_archive.html
+    Market to book ratio
+    Market to book ratio = Market value of equity (MV) : Book value of equity =
+    MKVALT /  BKVLPS =  MKVALT / (AT - LT)
+
+   PRCC_C *CSHO (If this market value of equity is not available, we take the product of monthly close market price (PRCCM) and the quarterly shares outstanding (CSHOQ) as of December from the Compustat Security pricing table (SECM))
+   BKVLPS 
+   
+   https://wrds-www.wharton.upenn.edu/pages/support/applications/risk-and-valuation-measures/market-book-mb-ratio/
+   http://finabase.blogspot.com/2011/03/ratios-values-and-other-instruments.html
+   
+ - Negative B/M: dummy
+ 
+'''
+
+#◇ Import
+COMPS_fy200X = pd.read_excel(directory+"Compustat_Accounting_"+FCY_COMPS_Acc+".xlsx", sheet_name="WRDS") 
+
+
+# ★☆ CUSIP: zeros ☆★
+COMPS_fy200X["CUSIP"]=COMPS_fy200X["CUSIP"].astype(str)
+COMPS_fy200X["CUSIP"]=COMPS_fy200X["CUSIP"].str.zfill(9)
+
+
+# Excel is faster and no errors as in dataframe e.g., "nan"
+#"Market Value - Total - Fiscal" (MV1 is not used since missing values)
+COMPS_fy200X=COMPS_fy200X[["CUSIP","Market Capitalization","Long-Term Debt","Short-Term Debt","Cash Holdings","Profitability","B/M","Negative B/M","Assets - Total","Price Close - Annual - Calendar"]]
+
+
+COMPS_fy200X=COMPS_fy200X[(COMPS_fy200X["Assets - Total"] != 0)] # & (COMPS_fy200X["Assets - Total"] != ""), is invalid 
+COMPS_fy200X=COMPS_fy200X.dropna(subset=["Assets - Total"]) # 1500 obs drop
+
+
+COMPS_fy200X=COMPS_fy200X.dropna(subset=["Price Close - Annual - Calendar"]) # 8752=>8033 obs matches with excel!
+
+# "Book Value Per Share","Cash and Short-Term Investments","Common Shares Outstanding","Debt in Current Liabilities - Total","Long-Term Debt - Total","Liabilities - Total","Operating Income Before Depreciation"
+
+COMPS_fy200X.count(axis="index")
+COMPS_fy200X.dropna(subset=["B/M"]) 
+
+COMPS_fy200X=COMPS_fy200X.dropna(subset=["CUSIP"]) 
+COMPS_fy200X.count(axis="index")
+
+COMPS_fy200X=COMPS_fy200X.dropna(subset=["B/M"]) # WHY DEBT CASH PROF plummet while B/M dont change????
+COMPS_fy200X.count(axis="index")
+
+# https://stackoverflow.com/questions/22649693/drop-rows-with-all-zeros-in-pandas-data-frame
+
+COMPS_fy200X=COMPS_fy200X[["CUSIP","Market Capitalization","Long-Term Debt","Short-Term Debt","Cash Holdings","Profitability","B/M","Negative B/M"]]
+
+
+
+#◆ check excel
+COMPS_fy200X.to_excel(directory+"Excel Check\\"+"COMPS_"+FCY_COMPS_Acc+".xlsx", index=False) 
+
+
+#%%
+'''
+ [Section 4.1: Integrate datasets - Combining 1.TR, 2.CRSP, 3.Compustat]
+
+'''
+
+MERGED_Crisis_2datasets=pd.merge(CRSP_CrisisReturn_AND_Pre12FirmMom, TR_wCUSIP, on="CUSIP")
+
+MERGED_Crisis_3datasets=pd.merge(MERGED_Crisis_2datasets, COMPS_fy200X, on="CUSIP")
+# to get unique values from Series, use .unique instead of set()
+
+print(
+str(len(MERGED_Crisis_3datasets.CUSIP.unique()))+" and "+
+str(len(MERGED_Crisis_2datasets.CUSIP.unique()))+" and "+
+str(len(TR_wCUSIP.CUSIP.unique()))+" and "+
+str(len(CRSP_CrisisReturn_AND_Pre12FirmMom.CUSIP.unique()))+" and "+
+str(len(COMPS_fy200X.CUSIP.unique()))
+)
+
+
+# print out: example
+TR_ConvertTable.loc[TR_ConvertTable['CUSIP'] == 354100]
+TR_woCUSIP.loc[TR_woCUSIP['RIC'] == ""]
+
+
+# the drop in MERGED_Crisis_2datasets???
+# "CRSP_Crisis_Period_Return2.xlsx" is refined to "CRSP_CrisisReturn_AND_Pre12FirmMom"
+
+
+#◆ check excel
+MERGED_Crisis_3datasets.to_excel(directory+"Excel Check\\"+"MERGED_Crisis_3datasets_inclSIC_Mark.xlsx", index=False) 
+MERGED_Crisis_2datasets.to_excel(directory+"Excel Check\\"+"MERGED_Crisis_2datasets_inclSIC_Mark.xlsx", index=False) 
+
+del MERGED_Crisis_2datasets
+
+'''
+[Check intersection]
+intersection_set=set(TR_wCUSIP["CUSIP"]).intersection(set(CRSP_CrisisReturn_AND_Pre12FirmMom["CUSIP"]))
+intersection_list=list(intersection_set)
+len(intersection_list)
+
+MERGED_Crisis_3datasets["intersection_list"]=pd.Series(intersection_list)
+# MERGED_Crisis_3datasets["intersection_list"]=intersection_list, does not work because diff length
+# https://stackoverflow.com/questions/42382263/valueerror-length-of-values-does-not-match-length-of-index-pandas-dataframe-u
+
+
+
+[◆ check excel]
+TR_wCUSIP.to_excel(directory+"Excel Check\\"+"TR_wCUSIP.xlsx", index=False) 
+TR_woCUSIP.to_excel(directory+"Excel Check\\"+"TR_woCUSIP.xlsx", index=False) 
+CRSP_CrisisReturn_AND_Pre12FirmMom.to_excel(directory+"Excel Check\\"+"CRSP_CrisisReturn_AND_Pre12FirmMom.xlsx", index=False) 
+'''
+
+
+#%%
+'''
+ [Section 4.2: Integrate datasets - Excl. 250MM and fin ind + firm survives during crisis?]
+ 
+ -  ◆◇ BEFORE REGRESSING ◆◇
  - drop financial industry SIC:6000-6999
  - drop market cap under 250M
+'''
+
+MERGED_Crisis_3datasets["SIC"]=pd.to_numeric(MERGED_Crisis_3datasets["SIC"])
+
+#MERGED_Crisis_3datasets.loc[MERGED_Crisis_3datasets['SIC'] == 0]
+
+MERGED_Crisis_3datasets = MERGED_Crisis_3datasets[(MERGED_Crisis_3datasets["SIC"] < 60) | (MERGED_Crisis_3datasets["SIC"] > 69)] # use | instead of or
+
+MERGED_Crisis_3datasets = MERGED_Crisis_3datasets[MERGED_Crisis_3datasets["Market Capitalization"] >= 250] # This will automaticall drop Markcap = 0, so no worries about ln(0)
+MERGED_Crisis_3datasets['LN_Mark_Cap'] = np.log(MERGED_Crisis_3datasets["Market Capitalization"])
+MERGED_Crisis_3datasets = MERGED_Crisis_3datasets.drop(columns=["RIC"]) #"Market Capitalization" not dropped: descriptive stats
+
+
+# survival check: 630 firms => 629 firms (FY2008)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(1)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(2)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(3)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(4)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(5)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(6)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(7)
+MERGED_Crisis_3datasets.groupby(["Period1to8"]).get_group(8)
+
+
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200808)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200809)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200810)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200811)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200812)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200901)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200902)
+MERGED_Crisis_3datasets.groupby(["Date"]).get_group(200903)
+
+
+#◆ check excel
+MERGED_Crisis_3datasets.to_excel(directory+"Excel Check\\"+"MERGED_Crisis_3datasets_exclSIC_Mark.xlsx", index=False) 
+
+#%%
+'''
+ [Section 5.1: Fama French data - Pre Crisis (60months + alpha) - Importing FF, Momentum, Returns (2003August - 2009Feb)]
+ 
+ - ◆◇ Data Date or Fiscal Year ◆◇
+ 
+ - ◆◇ -10 < MKTRF < 10 ; -.018 < Value weighted < 0.08 => ADJUST ◆◇
+  
+ - ◆◇ Value weighted Index (incl. dividend)*100 - RF => then it is very close to MKT-RF !! ◆◇
+
+'''
+
+# Importing
+#◇ COMPUSTATCapitalIQ
+FF_Pre60_Return = pd.DataFrame(Return_Price_All, columns= ['CUSIP','Monthly Total Return','Date'])
+
+# add zeros!!!
+FF_Pre60_Return["CUSIP"]=FF_Pre60_Return["CUSIP"].astype(str)
+FF_Pre60_Return["CUSIP"]=FF_Pre60_Return["CUSIP"].str.zfill(9)
+
+FF_Pre60_Return=FF_Pre60_Return[(FF_Pre60_Return['Date'] >= 200308) & (FF_Pre60_Return['Date'] <= 200902)]
+
+FF_Allperiod_MomFactor = pd.read_excel(directory+"Fama_French_HP\\"+"F-F_Momentum_Factor.xlsx", sheet_name="Tabelle1") #◇
+FF_Allperiod_ThreeFactors = pd.read_excel(directory+"Fama_French_HP\\"+"F-F_Research_Data_Factors.xlsx", sheet_name="Tabelle1") #◇
+FF_WeightedValueIndex = pd.read_excel(directory+"Fama_French_HP\\"+"CRSP_ValueWeightedIndex.xlsx", sheet_name="WRDS") #◇
+
+
+# Keeping/Dropping columns of dataframe
+##FF_Pre60_Return = FF_Pre60_Return[['CUSIP','Date','Monthly Total Return']]
+FF_WeightedValueIndex=FF_WeightedValueIndex[["Value-Weighted Return-incl. dividends","Date"]]
+
+
+# ☆☆ Adjust unit of return ☆☆
+FF_Pre60_Return['Monthly Total Return']*=1/100
+FF_Allperiod_ThreeFactors["Mkt-RF"]*=1/100
+FF_Allperiod_ThreeFactors["SMB"]*=1/100
+FF_Allperiod_ThreeFactors["HML"]*=1/100
+FF_Allperiod_ThreeFactors["RF"]*=1/100
+FF_Allperiod_MomFactor["Momentum"]*=1/100
+
+# Rename
+FF_WeightedValueIndex.rename(columns={"Value-Weighted Return-incl. dividends":"Value_Weighted_Return_incl"}, inplace=True)
+
+
+# Four factors 60 months only (2003Aug - 2009Feb)
+FF_Pre60_MomFactor=FF_Allperiod_MomFactor[(FF_Allperiod_MomFactor['Date'] >= 200308) & (FF_Allperiod_MomFactor['Date'] <= 200902)]
+FF_Pre60_ThreeFactors=FF_Allperiod_ThreeFactors[(FF_Allperiod_ThreeFactors['Date'] >= 200308) & (FF_Allperiod_ThreeFactors['Date'] <= 200902)]
+
+
+# ☆☆ Adjust unit of index ☆☆
+FF_WeightedValueIndex["Value_Weighted_Return_incl"]*=1 
+
+
+# Merging FF, Momentum factors, and Value Index
+FF_Pre60Return_AND_Pre60FourFactors = FF_Pre60_Return.merge(FF_Pre60_ThreeFactors, on="Date")
+FF_Pre60Return_AND_Pre60FourFactors = FF_Pre60Return_AND_Pre60FourFactors.merge(FF_Pre60_MomFactor, on="Date")
+FF_Pre60Return_AND_Pre60FourFactors = FF_Pre60Return_AND_Pre60FourFactors.merge(FF_WeightedValueIndex, on="Date")
+
+
+# Value_Weighted_Return_incl - RF: subtract
+FF_Pre60Return_AND_Pre60FourFactors["VWI_RF"] = FF_Pre60Return_AND_Pre60FourFactors["Value_Weighted_Return_incl"]-FF_Pre60Return_AND_Pre60FourFactors["RF"]
+
+
+# drop columns
+FF_Pre60Return_AND_Pre60FourFactors = FF_Pre60Return_AND_Pre60FourFactors.drop(columns=["Mkt-RF","Value_Weighted_Return_incl"])
+
+
+# check
+FF_Pre60Return_AND_Pre60FourFactors["Date"].max()
+FF_Pre60Return_AND_Pre60FourFactors["Date"].min()
+
+
+#◆ check excel: time-consuming so usually disabled
+#FF_Pre60Return_AND_Pre60FourFactors.to_excel(directory+"Excel Check\\"+"FF_Pre60Return_AND_Pre60FourFactors.xlsx", index=False) 
+
+
+del FF_Pre60_Return, FF_Pre60_MomFactor, FF_Pre60_ThreeFactors  # FF_WeightedValueIndex should not be deleted
+
+'''
+
+FF_Pre60Return_AND_Pre60FourFactors = FF_Pre60Return_AND_Pre60Three.sort_values(by=['CUSIP','Data Date - Security Monthly'])
+
+
+[Reason "Compustat_Return_60months_rev.xlsx" instead of "Compustat_Return_60months.xlsx"]
+
+=> Because if I run the following:
+FF_Pre60_Return['Data Date - Security Monthly'] = FF_Pre60_Return['Data Date - Security Monthly'].astype(str).str[0:6] 
+
+I get the error: ValueError: You are trying to merge on object and int64 columns.
+
+'''
+#%%
+'''
+ [Section 5.2: Fama French website data - Pre Crisis (60 months) - Filter with CUSIP of MERGED_Crisis_3datasets]
  
 '''
-wPrice_wFFM
 
-PROVISIONAL=df_CRSP_Crisis_wPrice.merge(df2008_cusip_final_CY, on="CUSIP")
-#PROVISIONAL=df2008_cusip_final_CY.merge(df_CRSP_Crisis_wPrice, on="CUSIP")
-
-PROVISIONAL=PROVISIONAL.sort_values(by=['Company Name'])
-
-# to get unique values from Series, use .unique instead of set()
-PROVISIONAL.CUSIP.unique()
-
-PROVISIONAL.to_excel(directory+"PROVISIONAL.xlsx")
-
-# CSR2, CSR3, CSR4: Series format to list
-
-quartile_ESG = df2008_cusip_final_CY["ESG_Score"].quantile([.25, .5, .75]).tolist()
-quartile_Env = df2008_cusip_final_CY["Environment_Pillar_Score"].quantile([.25, .5, .75]).tolist()
-quartile_Soc = df2008_cusip_final_CY["Social_Pillar_Score"].quantile([.25, .5, .75]).tolist()
+# CORRECTLY FILTERED?=> Excel check: OK
+FF_Pre60Return_AND_Pre60FourFactors_filtered = FF_Pre60Return_AND_Pre60FourFactors.loc[FF_Pre60Return_AND_Pre60FourFactors['CUSIP'].isin(MERGED_Crisis_3datasets.CUSIP)]
 
 
-# Conditional Replace
+#◆ check excel
+FF_Pre60Return_AND_Pre60FourFactors_filtered.to_excel(directory+"Excel Check\\"+"FF_Pre60Return_AND_Pre60FourFactors_filtered.xlsx", index=False) 
 
-PROVISIONAL.loc[quartile_ESG[0] > PROVISIONAL.ESG_Score, 'CSR1'] = 1
-PROVISIONAL.CSR1=PROVISIONAL.CSR1.fillna(0)
-
-PROVISIONAL.loc[(quartile_ESG[0] < PROVISIONAL.ESG_Score) & (PROVISIONAL.ESG_Score < quartile_ESG[1]), 'CSR2'] = 1
-PROVISIONAL.CSR2=PROVISIONAL.CSR2.fillna(0)
-
-PROVISIONAL.loc[(quartile_ESG[1] < PROVISIONAL.ESG_Score) & (PROVISIONAL.ESG_Score < quartile_ESG[2]), 'CSR3'] = 1
-PROVISIONAL.CSR3=PROVISIONAL.CSR3.fillna(0)
-
-PROVISIONAL.loc[PROVISIONAL.ESG_Score > quartile_ESG[2], 'CSR4'] = 1
-PROVISIONAL.CSR4=PROVISIONAL.CSR4.fillna(0)
+'''
+#check: exist
+FF_Pre60Return_AND_Pre60FourFactors_filtered.loc[FF_Pre60Return_AND_Pre60FourFactors_filtered['CUSIP'] == 438516106]
+FF_Pre60Return_AND_Pre60FourFactors.loc[FF_Pre60Return_AND_Pre60FourFactors['CUSIP'] == 438516106]
+MERGED_Crisis_3datasets.loc[MERGED_Crisis_3datasets['CUSIP'] == 438516106]
 
 
+#check: no exist
+FF_Pre60Return_AND_Pre60FourFactors_filtered.loc[FF_Pre60Return_AND_Pre60FourFactors_filtered['CUSIP'] == 354100]
+FF_Pre60Return_AND_Pre60FourFactors.loc[FF_Pre60Return_AND_Pre60FourFactors['CUSIP'] == 354100]
+MERGED_Crisis_3datasets.loc[MERGED_Crisis_3datasets['CUSIP'] == 354100]
+'''
+
+#%%
+'''
+ [Section 5.3: Fama French website data - Pre Crisis (60 months) - Regression by groups & Coefficients]
+ 
+ - ◆◇ Cluster robust SE irrelevant since only estimation wanted ◆◇
+ 
+ - Factor loadings re-estimated monthly based on the previous 60 month data (Lins, 2017, pp.1805,1813)
+ 
+ - Reg by group: https://stackoverflow.com/questions/49895000/regression-by-group-in-python-pandas
+ 
+ - https://stackoverflow.com/questions/24544805/python-pandas-how-to-run-multiple-univariate-regression-by-group
+  
+'''
+# check
+FF_Pre60Return_AND_Pre60FourFactors_filtered.count(axis="index")
+
+# Running regression: after deleting NaN in "Monthly Total Return", it works
+FF_Pre60Return_AND_Pre60FourFactors_filtered=FF_Pre60Return_AND_Pre60FourFactors_filtered[FF_Pre60Return_AND_Pre60FourFactors_filtered["Monthly Total Return"].notnull()]
+
+
+# check
+FF_Pre60Return_AND_Pre60FourFactors_filtered.count(axis="index")
+FF_Pre60Return_AND_Pre60FourFactors_filtered["Date"].max()
+FF_Pre60Return_AND_Pre60FourFactors_filtered["Date"].min()
+
+
+# create datasets
+FF_Pre60_ReturnFour_forPeriod1=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200308) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200807)]
+FF_Pre60_ReturnFour_forPeriod2=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200309) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200808)]
+FF_Pre60_ReturnFour_forPeriod3=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200310) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200809)]
+FF_Pre60_ReturnFour_forPeriod4=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200311) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200810)]
+FF_Pre60_ReturnFour_forPeriod5=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200312) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200811)]
+FF_Pre60_ReturnFour_forPeriod6=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200401) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200812)]
+FF_Pre60_ReturnFour_forPeriod7=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200402) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200901)]
+FF_Pre60_ReturnFour_forPeriod8=FF_Pre60Return_AND_Pre60FourFactors_filtered[(FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] >= 200403) & (FF_Pre60Return_AND_Pre60FourFactors_filtered['Date'] <= 200902)]
+
+
+#◆ check excel
+#FF_Pre60_ReturnFour_forPeriod1.to_excel(directory+"Excel Check\\"+"FF_Pre60_ReturnFour_forPeriod1.xlsx", index=False) 
+
+
+# run regressions for 8 datasets: from line 600 to 1000. 8 repetitions STARTS 
+# Excel check: OK (CUSIP: 886309, coefficients match with excel result)
+# =========>>>>>>>> Time Serires OLS regression =========>>>>>>>>
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod1["CUSIP"]
+FF_CUSIP_list_set1=FF_CUSIP_list.unique()
+FF_CUSIP_list_set1=FF_CUSIP_list_set1.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set1)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod1.groupby(['CUSIP']).get_group(FF_CUSIP_list_set1[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set1[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients1=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set1]
+FF_Coefficients1=pd.DataFrame(FF_Coefficients1).transpose()
+FF_Coefficients1.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set1'}, inplace=True)
+
+FF_Coefficients1.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod2["CUSIP"]
+FF_CUSIP_list_set2=FF_CUSIP_list.unique()
+FF_CUSIP_list_set2=FF_CUSIP_list_set2.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set2)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod2.groupby(['CUSIP']).get_group(FF_CUSIP_list_set2[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set2[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients2=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set2]
+FF_Coefficients2=pd.DataFrame(FF_Coefficients2).transpose()
+FF_Coefficients2.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set2'}, inplace=True)
+
+FF_Coefficients2.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod3["CUSIP"]
+FF_CUSIP_list_set3=FF_CUSIP_list.unique()
+FF_CUSIP_list_set3=FF_CUSIP_list_set3.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set3)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod3.groupby(['CUSIP']).get_group(FF_CUSIP_list_set3[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set3[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients3=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set3]
+FF_Coefficients3=pd.DataFrame(FF_Coefficients3).transpose()
+FF_Coefficients3.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set3'}, inplace=True)
+
+FF_Coefficients3.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod4["CUSIP"]
+FF_CUSIP_list_set4=FF_CUSIP_list.unique()
+FF_CUSIP_list_set4=FF_CUSIP_list_set4.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set4)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod4.groupby(['CUSIP']).get_group(FF_CUSIP_list_set4[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set4[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients4=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set4]
+FF_Coefficients4=pd.DataFrame(FF_Coefficients4).transpose()
+FF_Coefficients4.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set4'}, inplace=True)
+
+FF_Coefficients4.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod5["CUSIP"]
+FF_CUSIP_list_set5=FF_CUSIP_list.unique()
+FF_CUSIP_list_set5=FF_CUSIP_list_set5.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set5)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod5.groupby(['CUSIP']).get_group(FF_CUSIP_list_set5[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set5[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients5=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set5]
+FF_Coefficients5=pd.DataFrame(FF_Coefficients5).transpose()
+FF_Coefficients5.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set5'}, inplace=True)
+
+FF_Coefficients5.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod6["CUSIP"]
+FF_CUSIP_list_set6=FF_CUSIP_list.unique()
+FF_CUSIP_list_set6=FF_CUSIP_list_set6.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set6)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod6.groupby(['CUSIP']).get_group(FF_CUSIP_list_set6[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set6[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients6=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set6]
+FF_Coefficients6=pd.DataFrame(FF_Coefficients6).transpose()
+FF_Coefficients6.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set6'}, inplace=True)
+
+FF_Coefficients6.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod7["CUSIP"]
+FF_CUSIP_list_set7=FF_CUSIP_list.unique()
+FF_CUSIP_list_set7=FF_CUSIP_list_set7.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set7)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod7.groupby(['CUSIP']).get_group(FF_CUSIP_list_set7[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set7[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients7=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set7]
+FF_Coefficients7=pd.DataFrame(FF_Coefficients7).transpose()
+FF_Coefficients7.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set7'}, inplace=True)
+
+FF_Coefficients7.count(axis="index")
+
+#######################################
+
+FF_CUSIP_list=FF_Pre60_ReturnFour_forPeriod8["CUSIP"]
+FF_CUSIP_list_set8=FF_CUSIP_list.unique()
+FF_CUSIP_list_set8=FF_CUSIP_list_set8.tolist()
+
+del FF_CUSIP_list
+
+
+FF_Pre60_coef_VWIRF=[]; FF_Pre60_coef_SMB=[]; FF_Pre60_coef_HML=[]; FF_Pre60_coef_MOM=[]; FF_Pre60_intercept=[]; FF_Pre60_cusipinloop=[]
+
+
+for i in range(len(FF_CUSIP_list_set8)): 
+    
+    try:
+        subgroup=FF_Pre60_ReturnFour_forPeriod8.groupby(['CUSIP']).get_group(FF_CUSIP_list_set8[i])
+        
+        
+        X = subgroup[["VWI_RF","SMB","HML","Momentum"]]
+        X['intercept'] = 1
+        y = subgroup["Monthly Total Return"]
+        
+        model = sm.OLS(y, X).fit()
+    
+        FF_Pre60_coef_VWIRF.insert(i,model.params[0])
+        FF_Pre60_coef_SMB.insert(i,model.params[1])
+        FF_Pre60_coef_HML.insert(i,model.params[2])
+        FF_Pre60_coef_MOM.insert(i,model.params[3])
+        FF_Pre60_intercept.insert(i,model.params[4])
+        FF_Pre60_cusipinloop.insert(i,FF_CUSIP_list_set8[i])
+    
+    except Exception:
+        pass
+    
+
+# creating dataframe
+FF_Coefficients8=  [FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop, FF_CUSIP_list_set8]
+FF_Coefficients8=pd.DataFrame(FF_Coefficients8).transpose()
+FF_Coefficients8.rename(columns={ 0:'FF_Pre60_coef_VWIRF', 1:'FF_Pre60_coef_SMB', 2:'FF_Pre60_coef_HML', 3:'FF_Pre60_coef_MOM', 4: 'FF_Pre60_intercept', 5:'FF_Pre60_cusipinloop', 6:'FF_CUSIP_list_set8'}, inplace=True)
+
+FF_Coefficients8.count(axis="index")
 
 
 
-PROVISIONAL.loc[quartile_Env[0] > PROVISIONAL.Environment_Pillar_Score, 'Env1'] = 1
-PROVISIONAL.Env1=PROVISIONAL.Env1.fillna(0)
+del X, y, subgroup, i, model
 
-PROVISIONAL.loc[(quartile_Env[0] < PROVISIONAL.Environment_Pillar_Score) & (PROVISIONAL.Environment_Pillar_Score < quartile_Env[1]), 'Env2'] = 1
-PROVISIONAL.Env2=PROVISIONAL.Env2.fillna(0)
+#◆ check excel
+#FF_Coefficients1.to_excel(directory+"Excel Check\\"+"FF_Coefficients.xlsx")
 
-PROVISIONAL.loc[(quartile_Env[1] < PROVISIONAL.Environment_Pillar_Score) & (PROVISIONAL.Environment_Pillar_Score < quartile_Env[2]), 'Env3'] = 1
-PROVISIONAL.Env3=PROVISIONAL.Env3.fillna(0)
+'''
+◆ Exporting for checking
+FF_Pre60Return_AND_Pre60FourFactors.to_stata(directory+"Excel Check\\"+'FF_Pre60Return_AND_Pre60FourFactors.dta', write_index=False) 
+FF_Pre60Return_AND_Pre60FourFactors.to_excel(directory+"Excel Check\\"+'FF_Pre60Return_AND_Pre60FourFactors.xlsx') 
+FF_Pre60Return_AND_Pre60FourFactors.to_csv(directory+"Excel Check\\"+'FF_Pre60Return_AND_Pre60FourFactors.csv', sep=';')
+'''
 
-PROVISIONAL.loc[PROVISIONAL.Environment_Pillar_Score > quartile_Env[2], 'Env4'] = 1
-PROVISIONAL.Env4=PROVISIONAL.Env4.fillna(0)
+#%%
+'''
+ [Section 5.4: Fama French website data - Pre Crisis (60 months) - Tweaking dataset]
+ 
+ - 
 
+'''
 
+# delete previous datasets used for regressions
+del FF_Pre60_ReturnFour_forPeriod1, FF_Pre60_ReturnFour_forPeriod2, FF_Pre60_ReturnFour_forPeriod3, FF_Pre60_ReturnFour_forPeriod4
+del FF_Pre60_ReturnFour_forPeriod5, FF_Pre60_ReturnFour_forPeriod6, FF_Pre60_ReturnFour_forPeriod7, FF_Pre60_ReturnFour_forPeriod8
+del FF_Pre60_coef_VWIRF, FF_Pre60_coef_SMB, FF_Pre60_coef_HML, FF_Pre60_coef_MOM, FF_Pre60_intercept, FF_Pre60_cusipinloop
 
-
-PROVISIONAL.loc[quartile_Soc[0] > PROVISIONAL.Social_Pillar_Score, 'Soc1'] = 1
-PROVISIONAL.Soc1=PROVISIONAL.Soc1.fillna(0)
-
-PROVISIONAL.loc[(quartile_Soc[0] < PROVISIONAL.Social_Pillar_Score) & (PROVISIONAL.Social_Pillar_Score < quartile_Soc[1]), 'Soc2'] = 1
-PROVISIONAL.Soc2=PROVISIONAL.Soc2.fillna(0)
-
-PROVISIONAL.loc[(quartile_Soc[1] < PROVISIONAL.Social_Pillar_Score) & (PROVISIONAL.Social_Pillar_Score < quartile_Soc[2]), 'Soc3'] = 1
-PROVISIONAL.Soc3=PROVISIONAL.Soc3.fillna(0)
-
-PROVISIONAL.loc[PROVISIONAL.Social_Pillar_Score > quartile_Soc[2], 'Soc4'] = 1
-PROVISIONAL.Soc4=PROVISIONAL.Soc4.fillna(0)
-
-
-
-
-
-len(set(PROVISIONAL["CUSIP"]))
-
-
-
-#excel check
-PROVISIONAL.to_excel(directory+"PROVISIONAL_Quantile.xlsx")
-df2008_cusip_final_CY.to_excel(directory+"df2008_cusip_final_CY.xlsx")
+# check: OK
+FF_Coefficients1.loc[FF_Coefficients1["FF_Pre60_cusipinloop"]!=FF_Coefficients1["FF_CUSIP_list_set1"]]
+FF_Coefficients2.loc[FF_Coefficients2["FF_Pre60_cusipinloop"]!=FF_Coefficients2["FF_CUSIP_list_set2"]]
+FF_Coefficients3.loc[FF_Coefficients3["FF_Pre60_cusipinloop"]!=FF_Coefficients3["FF_CUSIP_list_set3"]]
+FF_Coefficients4.loc[FF_Coefficients4["FF_Pre60_cusipinloop"]!=FF_Coefficients4["FF_CUSIP_list_set4"]]
+FF_Coefficients5.loc[FF_Coefficients5["FF_Pre60_cusipinloop"]!=FF_Coefficients5["FF_CUSIP_list_set5"]]
+FF_Coefficients6.loc[FF_Coefficients6["FF_Pre60_cusipinloop"]!=FF_Coefficients6["FF_CUSIP_list_set6"]]
+FF_Coefficients7.loc[FF_Coefficients7["FF_Pre60_cusipinloop"]!=FF_Coefficients7["FF_CUSIP_list_set7"]]
+FF_Coefficients8.loc[FF_Coefficients8["FF_Pre60_cusipinloop"]!=FF_Coefficients8["FF_CUSIP_list_set8"]]
 
 
+# insert "Date" column
+FF_Coefficients1["Date"]=200808
+FF_Coefficients2["Date"]=200809
+FF_Coefficients3["Date"]=200810
+FF_Coefficients4["Date"]=200811
+FF_Coefficients5["Date"]=200812
+FF_Coefficients6["Date"]=200901
+FF_Coefficients7["Date"]=200902
+FF_Coefficients8["Date"]=200903
 
-# ValueError: Writing general object arrays is not supported
 
-list(PROVISIONAL.select_dtypes(include=['object']).columns) 
-PROVISIONAL['RIC'] = PROVISIONAL['RIC'].astype(str)
-PROVISIONAL['CUSIP'] = PROVISIONAL['CUSIP'].astype(str)
-PROVISIONAL['Company Name'] = PROVISIONAL['Company Name'].astype(str)
-PROVISIONAL['Year'] = PROVISIONAL['Year'].astype(str)
-PROVISIONAL['Month'] = PROVISIONAL['Month'].astype(str)
+# drop "FF_CUSIP_list_set"
+FF_Coefficients1=FF_Coefficients1.drop(columns=["FF_CUSIP_list_set1"])
+FF_Coefficients2=FF_Coefficients2.drop(columns=["FF_CUSIP_list_set2"])
+FF_Coefficients3=FF_Coefficients3.drop(columns=["FF_CUSIP_list_set3"])
+FF_Coefficients4=FF_Coefficients4.drop(columns=["FF_CUSIP_list_set4"])
+FF_Coefficients5=FF_Coefficients5.drop(columns=["FF_CUSIP_list_set5"])
+FF_Coefficients6=FF_Coefficients6.drop(columns=["FF_CUSIP_list_set6"])
+FF_Coefficients7=FF_Coefficients7.drop(columns=["FF_CUSIP_list_set7"])
+FF_Coefficients8=FF_Coefficients8.drop(columns=["FF_CUSIP_list_set8"])
 
 
-PROVISIONAL.to_stata(directory+'PROVISIONAL.dta') 
-
+# rename "FF_Pre60_cusipinloop"
+FF_Coefficients1.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients2.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients3.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients4.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients5.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients6.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients7.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
+FF_Coefficients8.rename(columns={"FF_Pre60_cusipinloop":"CUSIP"}, inplace=True)
 
 
 #%%
 '''
- [Section 7: Regression - Stata or Python (triangulate?)]
+ [Section 6.1: Complete the dataset - Crisis Period - Model (1)]
  
- - ◆◇ BALANCED PANEL REQUIRED EXPLICITLY IN PAPER ◆◇
- - https://towardsdatascience.com/simple-and-multiple-linear-regression-in-python-c928425168f9
- - https://stackoverflow.com/questions/24195432/fixed-effect-in-pandas-or-statsmodels
+ - ◆◇ One reg only (control for loadings); no adding back RF; no idio risk; no FF return estimation ◆◇
+ - RHS: ESG, SIC dummies, loadings, constant
+
+
+'''
+
+# Excel check among set1, 4, 8:  SEEMINGLY DO NOT MATCH BUT THE THE FACT IS JUST THAT THE ORDER IS DIFFERENT
+# HENCE PANEL DATA IS BALANCED in terms of CUSIP (This is validated in Sec6.3 where FF_CUSIP_list_set_union is created)
+
+MODEL1_Crisis_Part1=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients1, on=["CUSIP","Date"])
+MODEL1_Crisis_Part2=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients2, on=["CUSIP","Date"])
+MODEL1_Crisis_Part3=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients3, on=["CUSIP","Date"])
+MODEL1_Crisis_Part4=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients4, on=["CUSIP","Date"])
+MODEL1_Crisis_Part5=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients5, on=["CUSIP","Date"])
+MODEL1_Crisis_Part6=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients6, on=["CUSIP","Date"])
+MODEL1_Crisis_Part7=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients7, on=["CUSIP","Date"])
+MODEL1_Crisis_Part8=pd.merge(MERGED_Crisis_3datasets, FF_Coefficients8, on=["CUSIP","Date"])
+
+
+MODEL1_Crisis=pd.concat([MODEL1_Crisis_Part1, MODEL1_Crisis_Part2, MODEL1_Crisis_Part3, MODEL1_Crisis_Part4, MODEL1_Crisis_Part5, MODEL1_Crisis_Part6, MODEL1_Crisis_Part7, MODEL1_Crisis_Part8])
+
+
+#◆ check excel: stata not working so use excel
+MODEL1_Crisis.to_excel(directory+"Excel Check\\"+"MODEL1_Crisis.xlsx", index=False)
+
+
+del MODEL1_Crisis_Part1, MODEL1_Crisis_Part2, MODEL1_Crisis_Part3, MODEL1_Crisis_Part4 
+del MODEL1_Crisis_Part5, MODEL1_Crisis_Part6, MODEL1_Crisis_Part7, MODEL1_Crisis_Part8 
+
+#%%
+'''
+ [Section 6.2: Complete the dataset - Crisis Period - Model (2)]
+ 
+ - ◆◇ Two regs involved; need adding back RF; no idio risk; need FF return estimation ◆◇
+ - RHS: ESG, SIC dummies, (no loadings), constant
  
 '''
 
-# dfstata=pd.read_stata("ESG_monthlyreturn_merged.dta")
-# dfstata2=pd.read_stata("ESG_CrisisPeriod.dta")
+# extract value of three + momentum factors in crisis period (Pre60 is in Sec5): NEEDED FOR MODEL 2,3,4
+FF_Crisis_ThreeFactors=FF_Allperiod_ThreeFactors[(FF_Allperiod_ThreeFactors['Date'] >= 200808) & (FF_Allperiod_ThreeFactors['Date'] <= 200903)]
+FF_Crisis_MomFactor=FF_Allperiod_MomFactor[(FF_Allperiod_MomFactor['Date'] >= 200808) & (FF_Allperiod_MomFactor['Date'] <= 200903)]
+
+
+# merge
+FF_Crisis_FourFactors=pd.merge(FF_Crisis_ThreeFactors, FF_Crisis_MomFactor, on="Date")
+FF_Crisis_FourFactors_VWI=pd.merge(FF_Crisis_FourFactors, FF_WeightedValueIndex, on="Date")
+
+
+# subtract
+FF_Crisis_FourFactors_VWI["VWI_RF"] = FF_Crisis_FourFactors_VWI["Value_Weighted_Return_incl"]-FF_Crisis_FourFactors_VWI["RF"]
+
+# drop columns
+FF_Crisis_FourFactors_VWI=FF_Crisis_FourFactors_VWI.drop(columns=["Mkt-RF", "Value_Weighted_Return_incl"])
+
+# string "Date"
+#FF_Crisis_FourFactors_VWI["Date"]=FF_Crisis_FourFactors_VWI["Date"].astype(str)
+
+
+del FF_Crisis_FourFactors, FF_Crisis_MomFactor, FF_Crisis_ThreeFactors
+
+
+MODEL12_Crisis=pd.merge(MODEL1_Crisis, FF_Crisis_FourFactors_VWI, on="Date")
+
+MODEL12_Crisis["Model_Return"]=MODEL12_Crisis["RF"]+MODEL12_Crisis["FF_Pre60_intercept"]+MODEL12_Crisis["FF_Pre60_coef_VWIRF"]*MODEL12_Crisis["VWI_RF"]+MODEL12_Crisis["FF_Pre60_coef_SMB"]*MODEL12_Crisis["SMB"]+MODEL12_Crisis["FF_Pre60_coef_HML"]*MODEL12_Crisis["HML"]+MODEL12_Crisis["FF_Pre60_coef_MOM"]*MODEL12_Crisis["Momentum"]
+
+MODEL12_Crisis["Abnormal_Return"]=MODEL12_Crisis["Monthly Total Return"]-MODEL12_Crisis["Model_Return"]
+
+
+#◆ check excel
+MODEL12_Crisis.to_excel(directory+"Excel Check\\"+"MODEL12_Crisis.xlsx", index=False)
+
+
+#%%
+'''
+ [Section 6.3: Complete the dataset - Crisis Period - Model (3)&(4)]
+ 
+ - ◆◇ Two regs involves (3); no adding back RF; with idio risk; need FF return estimation because idio risk ◆◇
+ - RHS: ESG, SIC dummies, loadings, constant + firm momentum, idiosyncratic risk, accounting vars
+ 
+ - ◆◇ Two regs involves (4); need adding back RF; with idio risk; need FF return estimation ◆◇
+ - RHS: ESG, SIC dummies, (no loadings), constant + firm momentum, idiosyncratic risk, accounting vars
+
+ - ◆◇ Idio risk (residual variance): EMPIRICAL ASSET PRICING The Cross Section of Stock Returns ◆◇
+ =>  Frequently, researchers will omit the subtraction of k from the denominator of the calculation, or simply
+     use k = 1, which statistically assumes that the parameter estimates are exact, and therefore that RSE
+     represents an unbiased estimate of the standard deviation of the residuals.
+'''
+
+# before idio risk, need union of CUSIP in dataframe
+FF_CUSIP_list_set_union = FF_CUSIP_list_set1+FF_CUSIP_list_set2+FF_CUSIP_list_set3+FF_CUSIP_list_set4+FF_CUSIP_list_set5+FF_CUSIP_list_set6+FF_CUSIP_list_set7+FF_CUSIP_list_set8
+FF_CUSIP_list_set_union = pd.Series(FF_CUSIP_list_set_union)
+FF_CUSIP_list_set_union = FF_CUSIP_list_set_union.unique() 
+FF_CUSIP_list_set_union = pd.DataFrame(FF_CUSIP_list_set_union)
+FF_CUSIP_list_set_union=FF_CUSIP_list_set_union.rename(columns={0:"CUSIP"})
+
+
+del FF_CUSIP_list_set1, FF_CUSIP_list_set2, FF_CUSIP_list_set3, FF_CUSIP_list_set4
+del FF_CUSIP_list_set5, FF_CUSIP_list_set6, FF_CUSIP_list_set7, FF_CUSIP_list_set8
+
+# dont simply use equal (address would be same too)
+MODEL1234_Crisis=MODEL12_Crisis.copy()
+
+
+# ★☆ CHECK: no reduction of #obs? ☆★
+MODEL1234_Crisis_filtered = MODEL1234_Crisis.loc[MODEL1234_Crisis['CUSIP'].isin(FF_CUSIP_list_set_union["CUSIP"])]
+
+
+# Compute idio risk: numerator
+MODEL1234_Crisis["Squared_Abnormal_Return"]=MODEL1234_Crisis["Abnormal_Return"]**2
+sqsum_abreturn=MODEL1234_Crisis.groupby("CUSIP")["Squared_Abnormal_Return"].sum() # consistency with excel: OK
+sqsum_abreturn=pd.DataFrame(sqsum_abreturn)
+sqsum_abreturn["CUSIP"]=sqsum_abreturn.index
+sqsum_abreturn=sqsum_abreturn.rename(columns={"Squared_Abnormal_Return":"SUMbyCUSIP_Squared_AbReturn"})
+
+
+# Compute idio risk: denominator
+MODEL1234_Crisis["Count"]=1
+number_period=MODEL1234_Crisis.groupby("CUSIP")["Count"].sum()
+number_period=pd.DataFrame(number_period)
+number_period["denominator"]=number_period["Count"]-idio_k
+number_period=number_period.drop(columns=["Count"])
+
+
+# merge
+MODEL1234_Crisis = pd.merge(MODEL1234_Crisis, sqsum_abreturn, on="CUSIP")
+MODEL1234_Crisis = pd.merge(MODEL1234_Crisis, number_period, on="CUSIP")
+
+
+# idio risk
+MODEL1234_Crisis["Idiosyncratic_Risk"] = MODEL1234_Crisis["SUMbyCUSIP_Squared_AbReturn"]/MODEL1234_Crisis["denominator"] 
+
+
+# drop columns
+MODEL1234_Crisis=MODEL1234_Crisis.drop(columns=["Squared_Abnormal_Return","Count","SUMbyCUSIP_Squared_AbReturn","denominator"])
+
+
+# drop CUSIP if Period < 8 - idio_k (i.e., not full period) @@@@@@
+number_period["CUSIP"]=number_period.index
+MODEL1234_Crisis = MODEL1234_Crisis.loc[MODEL1234_Crisis['CUSIP'].isin(number_period.CUSIP[number_period.denominator == 8-idio_k])]
+
+
+# check consistency
+set(MODEL1234_Crisis_filtered["CUSIP"]) - set(MODEL1234_Crisis["CUSIP"])
+number_period.CUSIP[number_period.denominator < 8-idio_k]
+
+
+#del sqsum_abreturn, number_period
+
+#%%
+'''
+ [Section 7: Additional - Quantile ESG Scores]
+  
+'''
+
+# CSR2, CSR3, CSR4: from Series to list
+quartile_CESG = TR_wCUSIP["ESG_Combined_Score"].quantile([.25, .5, .75]).tolist()
+quartile_ESG = TR_wCUSIP["ESG_Score"].quantile([.25, .5, .75]).tolist()
+quartile_Env = TR_wCUSIP["Environment_Pillar_Score"].quantile([.25, .5, .75]).tolist()
+quartile_Soc = TR_wCUSIP["Social_Pillar_Score"].quantile([.25, .5, .75]).tolist()
+
+
+# Conditional Replace: CESG_Score
+MODEL1234_Crisis.loc[quartile_CESG[0] > MODEL1234_Crisis.ESG_Combined_Score, 'CESG1'] = 1
+MODEL1234_Crisis.CESG1=MODEL1234_Crisis.CESG1.fillna(0)
+
+MODEL1234_Crisis.loc[(quartile_CESG[0] < MODEL1234_Crisis.ESG_Combined_Score) & (MODEL1234_Crisis.ESG_Combined_Score < quartile_CESG[1]), 'CESG2'] = 1
+MODEL1234_Crisis.CESG2=MODEL1234_Crisis.CESG2.fillna(0)
+
+MODEL1234_Crisis.loc[(quartile_CESG[1] < MODEL1234_Crisis.ESG_Combined_Score) & (MODEL1234_Crisis.ESG_Combined_Score < quartile_CESG[2]), 'CESG3'] = 1
+MODEL1234_Crisis.CESG3=MODEL1234_Crisis.CESG3.fillna(0)
+
+MODEL1234_Crisis.loc[MODEL1234_Crisis.ESG_Combined_Score > quartile_CESG[2], 'CESG4'] = 1
+MODEL1234_Crisis.CESG4=MODEL1234_Crisis.CESG4.fillna(0)
 
 
 
-X = PROVISIONAL["ESG_Score"]
-X1 = PROVISIONAL["Environment_Pillar_Score"]
-X2 = PROVISIONAL["Social_Pillar_Score"]
-y = PROVISIONAL["Monthly Total Return"]
+# Conditional Replace: ESG_Score
+MODEL1234_Crisis.loc[quartile_ESG[0] > MODEL1234_Crisis.ESG_Score, 'ESG1'] = 1
+MODEL1234_Crisis.ESG1=MODEL1234_Crisis.ESG1.fillna(0)
 
-model = sm.OLS(y, X).fit()
-model2 = sm.OLS(X1, X).fit()
+MODEL1234_Crisis.loc[(quartile_ESG[0] < MODEL1234_Crisis.ESG_Score) & (MODEL1234_Crisis.ESG_Score < quartile_ESG[1]), 'ESG2'] = 1
+MODEL1234_Crisis.ESG2=MODEL1234_Crisis.ESG2.fillna(0)
 
-model.summary()
-model2.summary()
+MODEL1234_Crisis.loc[(quartile_ESG[1] < MODEL1234_Crisis.ESG_Score) & (MODEL1234_Crisis.ESG_Score < quartile_ESG[2]), 'ESG3'] = 1
+MODEL1234_Crisis.ESG3=MODEL1234_Crisis.ESG3.fillna(0)
 
-plt.plot(X,y)
-plt.plot(X,X1, color='green', marker='o')
-plt.plot(X,X1, 'bo')
+MODEL1234_Crisis.loc[MODEL1234_Crisis.ESG_Score > quartile_ESG[2], 'ESG4'] = 1
+MODEL1234_Crisis.ESG4=MODEL1234_Crisis.ESG4.fillna(0)
+
+
+
+# Conditional Replace: Environment
+MODEL1234_Crisis.loc[quartile_Env[0] > MODEL1234_Crisis.Environment_Pillar_Score, 'Env1'] = 1
+MODEL1234_Crisis.Env1=MODEL1234_Crisis.Env1.fillna(0)
+
+MODEL1234_Crisis.loc[(quartile_Env[0] < MODEL1234_Crisis.Environment_Pillar_Score) & (MODEL1234_Crisis.Environment_Pillar_Score < quartile_Env[1]), 'Env2'] = 1
+MODEL1234_Crisis.Env2=MODEL1234_Crisis.Env2.fillna(0)
+
+MODEL1234_Crisis.loc[(quartile_Env[1] < MODEL1234_Crisis.Environment_Pillar_Score) & (MODEL1234_Crisis.Environment_Pillar_Score < quartile_Env[2]), 'Env3'] = 1
+MODEL1234_Crisis.Env3=MODEL1234_Crisis.Env3.fillna(0)
+
+MODEL1234_Crisis.loc[MODEL1234_Crisis.Environment_Pillar_Score > quartile_Env[2], 'Env4'] = 1
+MODEL1234_Crisis.Env4=MODEL1234_Crisis.Env4.fillna(0)
+
+
+
+# Conditional Replace: Social
+MODEL1234_Crisis.loc[quartile_Soc[0] > MODEL1234_Crisis.Social_Pillar_Score, 'Soc1'] = 1
+MODEL1234_Crisis.Soc1=MODEL1234_Crisis.Soc1.fillna(0)
+
+MODEL1234_Crisis.loc[(quartile_Soc[0] < MODEL1234_Crisis.Social_Pillar_Score) & (MODEL1234_Crisis.Social_Pillar_Score < quartile_Soc[1]), 'Soc2'] = 1
+MODEL1234_Crisis.Soc2=MODEL1234_Crisis.Soc2.fillna(0)
+
+MODEL1234_Crisis.loc[(quartile_Soc[1] < MODEL1234_Crisis.Social_Pillar_Score) & (MODEL1234_Crisis.Social_Pillar_Score < quartile_Soc[2]), 'Soc3'] = 1
+MODEL1234_Crisis.Soc3=MODEL1234_Crisis.Soc3.fillna(0)
+
+MODEL1234_Crisis.loc[MODEL1234_Crisis.Social_Pillar_Score > quartile_Soc[2], 'Soc4'] = 1
+MODEL1234_Crisis.Soc4=MODEL1234_Crisis.Soc4.fillna(0)
+
+
+del quartile_CESG, quartile_ESG, quartile_Env, quartile_Soc
+
+
+#%%
+'''
+ [Section 8: Complete the final dataset - 8 periods]
+ 
+ - ◆◇ Balanced Panel is created at the end of Sec 6.3 ◆◇
+
+'''
+
+# add ID for xtset in Stata
+FF_CUSIP_list_set_union["ID"]=FF_CUSIP_list_set_union.index
+
+
+# merge
+MODEL1234_Crisis=pd.merge(MODEL1234_Crisis, FF_CUSIP_list_set_union, on="CUSIP")
+
+# idio from string to value
+#MODEL1234_Crisis["Idiosyncratic_Risk"]=pd.to_numeric(MODEL1234_Crisis["Idiosyncratic_Risk"])
+
+
+#◆ check excel
+MODEL1234_Crisis.to_excel(directory+"Excel Check\\"+"MODEL1234_Crisis.xlsx", index=False)
+
+
+#%%
+'''
+ [Section 9: Final dataset - aggregate to whole Crisis Period]
+ 
+'''
+# dont simply use equal (address would be same too)
+MODEL1234_Crisis_One = MODEL1234_Crisis.copy()
+
+
+# cumulative raw 
+MODEL1234_Crisis_One["1+Monthly Total Return"]=MODEL1234_Crisis_One["Monthly Total Return"]+1
+cum_table=MODEL1234_Crisis_One.groupby("CUSIP")["1+Monthly Total Return"].prod()
+cum_table=cum_table.to_frame()
+
+cum_table.rename(columns={"1+Monthly Total Return":"1+Cum Crisis Raw Return"}, inplace=True)
+cum_table["CUSIP"]=cum_table.index
+
+
+# abnormal return computed via model return
+MODEL1234_Crisis_One["1+Model_Return"]=MODEL1234_Crisis_One["Model_Return"]+1
+
+# check: no reduction of size & column increase
+cum_table["1+Cum Crisis Model Return"]=MODEL1234_Crisis_One.groupby("CUSIP")["1+Model_Return"].prod()
+
+
+cum_table["Cum Crisis Raw Return"]=cum_table["1+Cum Crisis Raw Return"]-1
+cum_table["Cum Crisis Abnormal Return"]=cum_table["1+Cum Crisis Raw Return"] - cum_table["1+Cum Crisis Model Return"]
+
+cum_table=cum_table.drop(columns=["1+Cum Crisis Model Return","1+Cum Crisis Raw Return"])
+
+
+# drop MODEL1234_Crisis_One columns
+MODEL1234_Crisis_One=MODEL1234_Crisis_One.drop(columns=["1+Monthly Total Return","1+Model_Return"])
+
+
+# merge
+MODEL1234_Crisis_One=pd.merge(MODEL1234_Crisis_One, cum_table, on="CUSIP")
+
+
+# check
+MODEL1234_Crisis_One["Period1to8"].describe()
+MODEL1234_Crisis_One["Date"].describe()
+
+
+# drop
+MODEL1234_Crisis_One=MODEL1234_Crisis_One[MODEL1234_Crisis_One["Period1to8"] == 1]
+MODEL1234_Crisis_One=MODEL1234_Crisis_One.drop(columns=["Monthly Total Return","Abnormal_Return","Model_Return","Date","Period1to8","SMB","HML","RF","Momentum","VWI_RF","Governance_Pillar_Score"])
+
+
+#◆ check excel
+MODEL1234_Crisis_One.to_excel(directory+"Excel Check\\"+"MODEL1234_Crisis_One_"+"ESG"+FCY_ESG+".xlsx", index=False)
+
+
