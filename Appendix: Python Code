@@ -29,7 +29,7 @@ ek.set_app_key('a11a2281b8cd45b5b65b935a584aeec3dc957f43')
 directory="C:\\Users\\s9194518\\Python\\Lins2017\\"
 
 
-FCY_ESG="CY2007"
+FCY_ESG="CY2006"
 FCY_COMPS_Acc="CY2007"
 idio_k=0 # subtract from denominator for estimating idio risk
 
@@ -291,6 +291,8 @@ CRSP_CrisisReturn_AND_Pre12FirmMom.count(axis="index")
 # keep necessary columns
 CRSP_CrisisReturn_AND_Pre12FirmMom=CRSP_CrisisReturn_AND_Pre12FirmMom[["CUSIP","Company Name","Date","Monthly Total Return","Period1to8","SIC","Momentum_firm","Stock Exchange Code"]]
 
+# NEW(20190320):drop Momentum_firm blank cells
+CRSP_CrisisReturn_AND_Pre12FirmMom=CRSP_CrisisReturn_AND_Pre12FirmMom.dropna(subset=["Momentum_firm"]) 
 
 #◆ check excel
 CRSP_CrisisReturn_AND_Pre12FirmMom.to_excel(directory+"Excel Check\\"+"CRSP_CrisisReturn_AND_Pre12FirmMom.xlsx", index=False)
